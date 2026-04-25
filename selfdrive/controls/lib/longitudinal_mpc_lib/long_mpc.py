@@ -58,6 +58,12 @@ STOP_DISTANCE = 6.0
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
+GENTLE_LEAD_T_FOLLOW_EXTRA = 0.45
+GENTLE_LEAD_COST_SCALE_MAX = 2.0
+GENTLE_FAR_LEAD_START = 60.0
+GENTLE_FAR_LEAD_END = 165.0
+GENTLE_FAR_LEAD_MAX_SPEED_REDUCTION = 4.0
+GENTLE_FAR_LEAD_MIN_CLOSING_SPEED = 0.5
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -80,11 +86,31 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
+def get_gentle_lead_factor(level):
+  return float(np.clip(level, 0, 100)) / 100.0
+
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
+
+def get_gentle_far_lead_v_cruise(v_cruise, v_ego, lead, level):
+  if lead is None or not lead.status:
+    return v_cruise
+
+  d_rel = float(lead.dRel)
+  v_lead = max(float(lead.vLead), 0.0)
+  closing_speed = v_ego - v_lead
+  if d_rel < GENTLE_FAR_LEAD_START or closing_speed < GENTLE_FAR_LEAD_MIN_CLOSING_SPEED:
+    return v_cruise
+
+  level_factor = get_gentle_lead_factor(level)
+  distance_factor = np.clip((d_rel - GENTLE_FAR_LEAD_START) / (GENTLE_FAR_LEAD_END - GENTLE_FAR_LEAD_START), 0.0, 1.0)
+  closing_factor = np.clip(closing_speed / 10.0, 0.0, 1.0)
+  speed_reduction = GENTLE_FAR_LEAD_MAX_SPEED_REDUCTION * level_factor * distance_factor * closing_factor
+  far_lead_v_cruise = max(v_lead, v_ego - speed_reduction)
+  return min(v_cruise, far_lead_v_cruise)
 
 def gen_long_model():
   model = AcadosModel()
@@ -267,10 +293,13 @@ class LongitudinalMpc:
     for i in range(N):
       self.solver.cost_set(i, 'Zl', Zl)
 
-  def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard):
+  def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard, gentle_lead_enabled=False, gentle_lead_level=50):
     jerk_factor = get_jerk_factor(personality)
+    gentle_factor = get_gentle_lead_factor(gentle_lead_level) if gentle_lead_enabled else 0.0
+    gentle_cost_scale = 1.0 + gentle_factor * (GENTLE_LEAD_COST_SCALE_MAX - 1.0)
     a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
-    cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
+    cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST,
+                    jerk_factor * gentle_cost_scale * a_change_cost, jerk_factor * gentle_cost_scale * J_EGO_COST]
     constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
     self.set_cost_weights(cost_weights, constraint_cost_weights)
 
@@ -313,10 +342,13 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
+  def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard,
+             gentle_lead_enabled=False, gentle_lead_level=50, gentle_far_lead_enabled=False):
     t_follow = get_T_FOLLOW(personality)
     v_ego = self.x0[1]
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
+    gentle_factor = get_gentle_lead_factor(gentle_lead_level) if gentle_lead_enabled and self.status else 0.0
+    t_follow += GENTLE_LEAD_T_FOLLOW_EXTRA * gentle_factor
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
@@ -329,6 +361,9 @@ class LongitudinalMpc:
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
+    if gentle_lead_enabled and gentle_far_lead_enabled:
+      v_cruise = get_gentle_far_lead_v_cruise(v_cruise, v_ego, radarstate.leadOne, gentle_lead_level)
+
     v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
     # TODO does this make sense when max_a is negative?
     v_upper = v_ego + (T_IDXS * CRUISE_MAX_ACCEL * 1.05)

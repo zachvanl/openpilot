@@ -6,6 +6,7 @@ import cereal.messaging as messaging
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -22,6 +23,7 @@ A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+PARAMS_UPDATE_PERIOD = 1.0
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -61,10 +63,22 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
+    self.params = Params()
+    self.frame = -1
+    self.gentle_lead_braking = False
+    self.gentle_lead_braking_far_lead = True
+    self.gentle_lead_braking_level = 50
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
+
+    self.update_gentle_lead_braking_params()
+
+  def update_gentle_lead_braking_params(self):
+    self.gentle_lead_braking = self.params.get_bool("GentleLeadBraking")
+    self.gentle_lead_braking_far_lead = self.params.get_bool("GentleLeadBrakingFarLead")
+    self.gentle_lead_braking_level = int(np.clip(self.params.get("GentleLeadBrakingLevel", return_default=True), 0, 100))
 
   @staticmethod
   def parse_model(model_msg):
@@ -88,6 +102,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
   def update(self, sm):
     LongitudinalPlannerSP.update(self, sm)
+    self.frame += 1
+    if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
+      self.update_gentle_lead_braking_params()
 
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -136,9 +153,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if force_slow_decel:
       v_cruise = 0.0
 
-    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
+    gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking
+    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
+                         gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality)
+    self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality,
+                    gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level,
+                    gentle_far_lead_enabled=self.gentle_lead_braking_far_lead)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

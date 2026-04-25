@@ -201,6 +201,12 @@ def test_known_params_metadata():
   assert acc_long["max"] == 10
   assert acc_long["step"] == 1
 
+  gentle_level = metadata.get("GentleLeadBrakingLevel")
+  assert gentle_level is not None
+  assert gentle_level["min"] == 0
+  assert gentle_level["max"] == 100
+  assert gentle_level["step"] == 1
+
 
 def test_torque_control_tune_versions_in_sync():
   """
