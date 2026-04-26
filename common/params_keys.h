@@ -158,7 +158,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"EnableGithubRunner", {PERSISTENT | BACKUP, BOOL}},
     {"GreenLightAlert", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"GentleLeadBraking", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"GentleLeadBrakingFarLead", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"GentleLeadBrakingLevel", {PERSISTENT | BACKUP, INT, "50"}},
     {"GithubRunnerSufficientVoltage", {CLEAR_ON_MANAGER_START , BOOL}},
     {"HasAcceptedTermsSP", {PERSISTENT, STRING, "0"}},

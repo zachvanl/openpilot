@@ -58,12 +58,7 @@ STOP_DISTANCE = 6.0
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
-GENTLE_LEAD_T_FOLLOW_EXTRA = 0.45
 GENTLE_LEAD_COST_SCALE_MAX = 2.0
-GENTLE_FAR_LEAD_START = 60.0
-GENTLE_FAR_LEAD_END = 165.0
-GENTLE_FAR_LEAD_MAX_SPEED_REDUCTION = 4.0
-GENTLE_FAR_LEAD_MIN_CLOSING_SPEED = 0.5
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -94,23 +89,6 @@ def get_stopped_equivalence_factor(v_lead):
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
-
-def get_gentle_far_lead_v_cruise(v_cruise, v_ego, lead, level):
-  if lead is None or not lead.status:
-    return v_cruise
-
-  d_rel = float(lead.dRel)
-  v_lead = max(float(lead.vLead), 0.0)
-  closing_speed = v_ego - v_lead
-  if d_rel < GENTLE_FAR_LEAD_START or closing_speed < GENTLE_FAR_LEAD_MIN_CLOSING_SPEED:
-    return v_cruise
-
-  level_factor = get_gentle_lead_factor(level)
-  distance_factor = np.clip((d_rel - GENTLE_FAR_LEAD_START) / (GENTLE_FAR_LEAD_END - GENTLE_FAR_LEAD_START), 0.0, 1.0)
-  closing_factor = np.clip(closing_speed / 10.0, 0.0, 1.0)
-  speed_reduction = GENTLE_FAR_LEAD_MAX_SPEED_REDUCTION * level_factor * distance_factor * closing_factor
-  far_lead_v_cruise = max(v_lead, v_cruise - speed_reduction)
-  return min(v_cruise, far_lead_v_cruise)
 
 def gen_long_model():
   model = AcadosModel()
@@ -343,12 +321,10 @@ class LongitudinalMpc:
     return lead_xv
 
   def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard,
-             gentle_lead_enabled=False, gentle_lead_level=50, gentle_far_lead_enabled=False):
+             gentle_lead_enabled=False, gentle_lead_level=50):
     t_follow = get_T_FOLLOW(personality)
-    v_ego = self.x0[1]
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
-    gentle_factor = get_gentle_lead_factor(gentle_lead_level) if gentle_lead_enabled and self.status else 0.0
-    t_follow += GENTLE_LEAD_T_FOLLOW_EXTRA * gentle_factor
+    v_ego = self.x0[1]
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
@@ -361,9 +337,6 @@ class LongitudinalMpc:
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
-    if gentle_lead_enabled and gentle_far_lead_enabled:
-      v_cruise = get_gentle_far_lead_v_cruise(v_cruise, v_ego, radarstate.leadOne, gentle_lead_level)
-
     v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
     # TODO does this make sense when max_a is negative?
     v_upper = v_ego + (T_IDXS * CRUISE_MAX_ACCEL * 1.05)
