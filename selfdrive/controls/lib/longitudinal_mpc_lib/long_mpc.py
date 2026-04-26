@@ -109,7 +109,7 @@ def get_gentle_far_lead_v_cruise(v_cruise, v_ego, lead, level):
   distance_factor = np.clip((d_rel - GENTLE_FAR_LEAD_START) / (GENTLE_FAR_LEAD_END - GENTLE_FAR_LEAD_START), 0.0, 1.0)
   closing_factor = np.clip(closing_speed / 10.0, 0.0, 1.0)
   speed_reduction = GENTLE_FAR_LEAD_MAX_SPEED_REDUCTION * level_factor * distance_factor * closing_factor
-  far_lead_v_cruise = max(v_lead, v_ego - speed_reduction)
+  far_lead_v_cruise = max(v_lead, v_cruise - speed_reduction)
   return min(v_cruise, far_lead_v_cruise)
 
 def gen_long_model():
