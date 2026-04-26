@@ -4,7 +4,6 @@ from openpilot.common.parameterized import parameterized_class
 
 from cereal import log
 
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import get_gentle_far_lead_v_cruise
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import get_safe_obstacle_distance, get_stopped_equivalence_factor, get_T_FOLLOW
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 
@@ -29,20 +28,6 @@ def run_following_distance_simulation(v_lead, t_end=100.0, e2e=False, personalit
   valid, output = man.evaluate()
   assert valid
   return output[-1,2] - output[-1,1]
-
-
-def test_gentle_far_lead_preserves_cruise_target():
-  lead = log.RadarState.LeadData.new_message()
-  lead.status = True
-  lead.dRel = 120.0
-  lead.vLead = 20.0
-
-  v_ego = 25.0
-  v_cruise = 35.0
-  gentle_v_cruise = get_gentle_far_lead_v_cruise(v_cruise, v_ego, lead, 100)
-
-  assert gentle_v_cruise < v_cruise
-  assert gentle_v_cruise > v_ego
 
 
 @parameterized_class(("e2e", "personality", "speed"), itertools.product(

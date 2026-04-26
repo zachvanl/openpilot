@@ -348,11 +348,7 @@
   },
   "GentleLeadBraking": {
     "title": "Gentle Lead Braking",
-    "description": "Smooths lead-vehicle deceleration by increasing following distance and ramping braking more gradually. Default is off."
-  },
-  "GentleLeadBrakingFarLead": {
-    "title": "Gentle Far-Lead Braking",
-    "description": "When Gentle Lead Braking is enabled, begins mild speed reduction earlier for already-detected far-ahead leads. Does not change lead detection."
+    "description": "Smooths lead-vehicle deceleration by ramping braking more gradually. Default is off."
   },
   "GentleLeadBrakingLevel": {
     "title": "Gentle Lead Braking Level",
