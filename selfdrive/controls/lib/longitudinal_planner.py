@@ -66,6 +66,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.params = Params()
     self.frame = -1
     self.gentle_lead_braking = False
+    self.gentle_lead_braking_far_lead = True
     self.gentle_lead_braking_level = 50
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
@@ -76,6 +77,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
   def update_gentle_lead_braking_params(self):
     self.gentle_lead_braking = self.params.get_bool("GentleLeadBraking")
+    self.gentle_lead_braking_far_lead = self.params.get_bool("GentleLeadBrakingFarLead")
     self.gentle_lead_braking_level = int(np.clip(self.params.get("GentleLeadBrakingLevel", return_default=True), 0, 100))
 
   @staticmethod
@@ -151,12 +153,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if force_slow_decel:
       v_cruise = 0.0
 
-    gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking
+    gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking and not reset_state
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
                          gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
     self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality,
-                    gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level)
+                    gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level,
+                    gentle_far_lead_enabled=self.gentle_lead_braking_far_lead)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

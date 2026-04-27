@@ -4,7 +4,13 @@ from openpilot.common.parameterized import parameterized_class
 
 from cereal import log
 
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import get_safe_obstacle_distance, get_stopped_equivalence_factor, get_T_FOLLOW
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  get_gentle_far_lead_v_cruise,
+  get_gentle_slow_lead_condition,
+  get_safe_obstacle_distance,
+  get_stopped_equivalence_factor,
+  get_T_FOLLOW,
+)
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 
 
@@ -28,6 +34,47 @@ def run_following_distance_simulation(v_lead, t_end=100.0, e2e=False, personalit
   valid, output = man.evaluate()
   assert valid
   return output[-1,2] - output[-1,1]
+
+class Lead:
+  def __init__(self, status=True, dRel=100.0, vLead=15.0):
+    self.status = status
+    self.dRel = dRel
+    self.vLead = vLead
+
+
+def test_gentle_far_lead_speed_gate():
+  v_cruise = 30.0
+  assert get_gentle_far_lead_v_cruise(v_cruise, 20.0, Lead(), 100) < v_cruise
+  assert get_gentle_far_lead_v_cruise(v_cruise, 23.0, Lead(), 100) == v_cruise
+
+
+def test_gentle_far_lead_noop_conditions():
+  v_cruise = 30.0
+  assert get_gentle_far_lead_v_cruise(v_cruise, 20.0, None, 100) == v_cruise
+  assert get_gentle_far_lead_v_cruise(v_cruise, 20.0, Lead(status=False), 100) == v_cruise
+  assert get_gentle_far_lead_v_cruise(v_cruise, 20.0, Lead(), 0) == v_cruise
+  assert get_gentle_far_lead_v_cruise(v_cruise, 20.0, Lead(dRel=100.0, vLead=19.0), 100) == v_cruise
+
+
+def test_gentle_far_lead_does_not_hold_normal_city_gap():
+  v_cruise = 30.0
+  assert get_gentle_far_lead_v_cruise(v_cruise, 20.0, Lead(dRel=45.0), 100) == v_cruise
+
+
+def test_gentle_slow_far_lead_needs_confirmation_at_freeway_speed():
+  v_cruise = 30.0
+  v_ego = 25.0
+  assert get_gentle_far_lead_v_cruise(v_cruise, v_ego, Lead(vLead=0.0), 100) == v_cruise
+  assert get_gentle_far_lead_v_cruise(v_cruise, v_ego, Lead(vLead=0.0), 100, slow_lead_confirmed=True) < v_cruise
+
+
+def test_gentle_slow_lead_condition():
+  assert get_gentle_slow_lead_condition(25.0, Lead(vLead=0.0))
+  assert not get_gentle_slow_lead_condition(25.0, None)
+  assert not get_gentle_slow_lead_condition(25.0, Lead(status=False, vLead=0.0))
+  assert not get_gentle_slow_lead_condition(25.0, Lead(dRel=50.0, vLead=0.0))
+  assert not get_gentle_slow_lead_condition(25.0, Lead(dRel=400.0, vLead=0.0))
+  assert not get_gentle_slow_lead_condition(25.0, Lead(dRel=100.0, vLead=20.0))
 
 
 @parameterized_class(("e2e", "personality", "speed"), itertools.product(
