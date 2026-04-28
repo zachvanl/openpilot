@@ -10,6 +10,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   get_safe_obstacle_distance,
   get_stopped_equivalence_factor,
   get_T_FOLLOW,
+  should_relax_gentle_lead_for_accel,
 )
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 
@@ -75,6 +76,19 @@ def test_gentle_slow_lead_condition():
   assert not get_gentle_slow_lead_condition(25.0, Lead(dRel=50.0, vLead=0.0))
   assert not get_gentle_slow_lead_condition(25.0, Lead(dRel=400.0, vLead=0.0))
   assert not get_gentle_slow_lead_condition(25.0, Lead(dRel=100.0, vLead=20.0))
+
+
+def test_gentle_accel_recovery_relaxes_for_normal_far_lead():
+  assert should_relax_gentle_lead_for_accel(30.0, 25.0, Lead(dRel=90.0, vLead=24.0))
+
+
+def test_gentle_accel_recovery_keeps_caution_for_close_or_closing_leads():
+  assert not should_relax_gentle_lead_for_accel(30.0, 25.0, Lead(dRel=35.0, vLead=24.0))
+  assert not should_relax_gentle_lead_for_accel(30.0, 25.0, Lead(dRel=90.0, vLead=18.0))
+
+
+def test_gentle_accel_recovery_keeps_caution_for_slow_stopped_far_lead():
+  assert not should_relax_gentle_lead_for_accel(30.0, 25.0, Lead(dRel=100.0, vLead=0.0))
 
 
 @parameterized_class(("e2e", "personality", "speed"), itertools.product(

@@ -12,6 +12,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import should_relax_gentle_lead_for_accel
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
@@ -154,8 +155,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       v_cruise = 0.0
 
     gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking and not reset_state
+    gentle_accel_recovery = gentle_lead_enabled and should_relax_gentle_lead_for_accel(v_cruise, v_ego, sm['radarState'].leadOne)
+    gentle_lead_smoothing_enabled = gentle_lead_enabled and not gentle_accel_recovery
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
-                         gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level)
+                         gentle_lead_enabled=gentle_lead_smoothing_enabled, gentle_lead_level=self.gentle_lead_braking_level)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
     self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality,
                     gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level,
@@ -182,10 +185,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
 
     if self.is_e2e(sm):
-      output_a_target = min(output_a_target_e2e, output_a_target_mpc)
-      self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
-      if output_a_target < output_a_target_mpc:
-        self.mpc.source = LongitudinalPlanSource.e2e
+      if gentle_accel_recovery and self.allow_throttle and not output_should_stop_e2e:
+        output_a_target = output_a_target_mpc
+        self.output_should_stop = output_should_stop_mpc
+      else:
+        output_a_target = min(output_a_target_e2e, output_a_target_mpc)
+        self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
+        if output_a_target < output_a_target_mpc:
+          self.mpc.source = LongitudinalPlanSource.e2e
     else:
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc

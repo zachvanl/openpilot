@@ -72,6 +72,9 @@ GENTLE_SLOW_LEAD_MIN_CLOSING_SPEED = 6.0
 GENTLE_SLOW_LEAD_MAX_TTC = 12.0
 GENTLE_SLOW_LEAD_MIN_TTC = 5.0
 GENTLE_SLOW_LEAD_CONFIRM_TIME = 0.5
+GENTLE_ACCEL_RECOVERY_CRUISE_GAP = 1.5
+GENTLE_ACCEL_RECOVERY_MIN_DISTANCE = 45.0
+GENTLE_ACCEL_RECOVERY_MAX_CLOSING_SPEED = 3.0
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -113,6 +116,21 @@ def get_gentle_slow_lead_condition(v_ego, lead):
   ttc = d_rel / max(closing_speed, 0.1)
   return (d_rel >= GENTLE_FAR_LEAD_START and v_lead <= GENTLE_SLOW_LEAD_MAX_SPEED and
           closing_speed >= GENTLE_SLOW_LEAD_MIN_CLOSING_SPEED and ttc <= GENTLE_SLOW_LEAD_MAX_TTC)
+
+def should_relax_gentle_lead_for_accel(v_cruise, v_ego, lead):
+  if lead is None or not lead.status:
+    return False
+
+  d_rel = float(lead.dRel)
+  v_lead = max(float(lead.vLead), 0.0)
+  closing_speed = v_ego - v_lead
+  below_cruise = v_cruise - v_ego
+  if below_cruise < GENTLE_ACCEL_RECOVERY_CRUISE_GAP:
+    return False
+  if get_gentle_slow_lead_condition(v_ego, lead):
+    return False
+
+  return d_rel >= GENTLE_ACCEL_RECOVERY_MIN_DISTANCE and closing_speed <= GENTLE_ACCEL_RECOVERY_MAX_CLOSING_SPEED
 
 def get_gentle_far_lead_v_cruise(v_cruise, v_ego, lead, level, slow_lead_confirmed=False, t_follow=None):
   if lead is None or not lead.status:
