@@ -185,14 +185,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
 
     if self.is_e2e(sm):
-      if gentle_accel_recovery and self.allow_throttle and not output_should_stop_e2e:
-        output_a_target = output_a_target_mpc
-        self.output_should_stop = output_should_stop_mpc
-      else:
-        output_a_target = min(output_a_target_e2e, output_a_target_mpc)
-        self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
-        if output_a_target < output_a_target_mpc:
-          self.mpc.source = LongitudinalPlanSource.e2e
+      output_a_target = min(output_a_target_e2e, output_a_target_mpc)
+      self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
+      if output_a_target < output_a_target_mpc:
+        self.mpc.source = LongitudinalPlanSource.e2e
     else:
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
