@@ -352,7 +352,7 @@
   },
   "GentleLeadBrakingFarLead": {
     "title": "Gentle Far-Lead Braking",
-    "description": "When Gentle Lead Braking is enabled, begins mild speed reduction earlier for already-detected far-ahead leads below 50 MPH. Does not change lead detection or freeway following distance."
+    "description": "When Gentle Lead Braking is on: below ~50 MPH, can cap cruise slightly for far-ahead leads so deceleration starts earlier in city driving. On any speed, after a short confirmation, can also cap cruise for a far, very slow or stopped lead (e.g. approaching stopped traffic on a freeway). Does not change lead detection or radar; MPC smoothing at freeway speeds stays stock."
   },
   "GentleLeadBrakingLevel": {
     "title": "Gentle Lead Braking Level",
