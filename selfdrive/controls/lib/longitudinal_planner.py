@@ -12,7 +12,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import should_relax_gentle_lead_for_accel
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import should_relax_gentle_lead_for_accel, GENTLE_FAR_LEAD_SPEED_MAX
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
@@ -155,8 +155,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       v_cruise = 0.0
 
     gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking and not reset_state
-    gentle_accel_recovery = gentle_lead_enabled and should_relax_gentle_lead_for_accel(v_cruise, v_ego, sm['radarState'].leadOne)
-    gentle_lead_smoothing_enabled = gentle_lead_enabled and not gentle_accel_recovery
+    gentle_at_city_speed = v_ego < GENTLE_FAR_LEAD_SPEED_MAX
+    gentle_accel_recovery = gentle_lead_enabled and gentle_at_city_speed and should_relax_gentle_lead_for_accel(v_cruise, v_ego, sm['radarState'].leadOne)
+    gentle_lead_smoothing_enabled = gentle_lead_enabled and gentle_at_city_speed and not gentle_accel_recovery
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
                          gentle_lead_enabled=gentle_lead_smoothing_enabled, gentle_lead_level=self.gentle_lead_braking_level)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)

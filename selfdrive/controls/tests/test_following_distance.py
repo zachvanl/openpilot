@@ -5,6 +5,7 @@ from openpilot.common.parameterized import parameterized_class
 from cereal import log
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  GENTLE_FAR_LEAD_SPEED_MAX,
   get_gentle_far_lead_v_cruise,
   get_gentle_slow_lead_condition,
   get_safe_obstacle_distance,
@@ -89,6 +90,15 @@ def test_gentle_accel_recovery_keeps_caution_for_close_or_closing_leads():
 
 def test_gentle_accel_recovery_keeps_caution_for_slow_stopped_far_lead():
   assert not should_relax_gentle_lead_for_accel(30.0, 25.0, Lead(dRel=100.0, vLead=0.0))
+
+
+def test_gentle_accel_recovery_not_used_at_near_cruise_speed():
+  assert not should_relax_gentle_lead_for_accel(33.0, 32.0, Lead(dRel=70.0, vLead=31.0))
+
+
+def test_gentle_weight_speed_gate_threshold():
+  assert GENTLE_FAR_LEAD_SPEED_MAX > 20.0
+  assert 30.0 > GENTLE_FAR_LEAD_SPEED_MAX
 
 
 @parameterized_class(("e2e", "personality", "speed"), itertools.product(
