@@ -1,10 +1,13 @@
 import pytest
 import itertools
+import numpy as np
 from openpilot.common.parameterized import parameterized_class
 
 from cereal import log
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  FREEWAY_FOLLOW_BONUS,
+  FREEWAY_FOLLOW_BP,
   GENTLE_FAR_LEAD_SPEED_MAX,
   get_gentle_far_lead_v_cruise,
   get_gentle_slow_lead_condition,
@@ -19,6 +22,7 @@ from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 def desired_follow_distance(v_ego, v_lead, t_follow=None):
   if t_follow is None:
     t_follow = get_T_FOLLOW()
+  t_follow += float(np.interp(v_ego, FREEWAY_FOLLOW_BP, [0.0, FREEWAY_FOLLOW_BONUS]))
   return get_safe_obstacle_distance(v_ego, t_follow) - get_stopped_equivalence_factor(v_lead)
 
 def run_following_distance_simulation(v_lead, t_end=100.0, e2e=False, personality=0):
@@ -99,6 +103,39 @@ def test_gentle_accel_recovery_not_used_at_near_cruise_speed():
 def test_gentle_weight_speed_gate_threshold():
   assert GENTLE_FAR_LEAD_SPEED_MAX > 20.0
   assert 30.0 > GENTLE_FAR_LEAD_SPEED_MAX
+
+
+def test_freeway_follow_bonus_zero_at_low_speed():
+  bonus = float(np.interp(15.0, FREEWAY_FOLLOW_BP, [0.0, FREEWAY_FOLLOW_BONUS]))
+  assert bonus == 0.0
+
+
+def test_freeway_follow_bonus_full_at_highway_speed():
+  bonus = float(np.interp(30.0, FREEWAY_FOLLOW_BP, [0.0, FREEWAY_FOLLOW_BONUS]))
+  assert bonus == pytest.approx(FREEWAY_FOLLOW_BONUS)
+
+
+def test_freeway_follow_bonus_increases_follow_distance():
+  t_base = get_T_FOLLOW()
+  dist_base = get_safe_obstacle_distance(30.0, t_base)
+  dist_with_bonus = get_safe_obstacle_distance(30.0, t_base + FREEWAY_FOLLOW_BONUS)
+  assert dist_with_bonus > dist_base
+
+
+def test_clip_curvature_speed_dependent_limits():
+  from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, _MAX_LAT_ACCEL_V
+  low_speed_curv, _ = clip_curvature(10.0, 0.5, 0.5, 0.0)
+  high_speed_curv, _ = clip_curvature(30.0, 0.5, 0.5, 0.0)
+  assert abs(low_speed_curv) > abs(high_speed_curv)
+  max_curv_at_30 = _MAX_LAT_ACCEL_V[1] / 30.0**2
+  assert high_speed_curv == pytest.approx(max_curv_at_30, abs=0.0001)
+
+
+def test_clip_curvature_roll_compensation_highway():
+  from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+  curv_flat, _ = clip_curvature(30.0, 0.005, 0.005, 0.0)
+  curv_banked, _ = clip_curvature(30.0, 0.005, 0.005, 0.08)
+  assert abs(curv_banked) > abs(curv_flat)
 
 
 @parameterized_class(("e2e", "personality", "speed"), itertools.product(

@@ -76,6 +76,9 @@ GENTLE_ACCEL_RECOVERY_CRUISE_GAP = 1.5
 GENTLE_ACCEL_RECOVERY_MIN_DISTANCE = 45.0
 GENTLE_ACCEL_RECOVERY_MAX_CLOSING_SPEED = 3.0
 
+FREEWAY_FOLLOW_BONUS = 0.20
+FREEWAY_FOLLOW_BP = [20.0, 28.0]
+
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
     return 1.0
@@ -405,6 +408,9 @@ class LongitudinalMpc:
     t_follow = get_T_FOLLOW(personality)
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
     v_ego = self.x0[1]
+
+    if self.status:
+      t_follow += float(np.interp(v_ego, FREEWAY_FOLLOW_BP, [0.0, FREEWAY_FOLLOW_BONUS]))
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)

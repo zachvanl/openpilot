@@ -9,9 +9,13 @@ CAR_ROTATION_RADIUS = 0.0
 MAX_CURVATURE = 0.2
 MAX_VEL_ERR = 5.0  # m/s
 
-# EU guidelines
+# EU guidelines (base values, reduced at highway speeds for smoother curve tracking)
 MAX_LATERAL_JERK = 5.0  # m/s^3
 MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
+
+_HIGH_SPEED_LAT_BP = [15., 30.]  # m/s (~34–67 mph)
+_MAX_LAT_JERK_V = [MAX_LATERAL_JERK, 3.5]
+_MAX_LAT_ACCEL_V = [MAX_LATERAL_ACCEL_NO_ROLL, 2.5]
 
 
 def clamp(val, min_val, max_val):
@@ -23,16 +27,18 @@ def smooth_value(val, prev_val, tau, dt=DT_MDL):
   return alpha * val + (1 - alpha) * prev_val
 
 def clip_curvature(v_ego, prev_curvature, new_curvature, roll) -> tuple[float, bool]:
-  # This function respects ISO lateral jerk and acceleration limits + a max curvature
   v_ego = max(v_ego, MIN_SPEED)
-  max_curvature_rate = MAX_LATERAL_JERK / (v_ego ** 2)  # inexact calculation, check https://github.com/commaai/openpilot/pull/24755
+
+  max_lateral_jerk = float(np.interp(v_ego, _HIGH_SPEED_LAT_BP, _MAX_LAT_JERK_V))
+  max_curvature_rate = max_lateral_jerk / (v_ego ** 2)
   new_curvature = np.clip(new_curvature,
                           prev_curvature - max_curvature_rate * DT_CTRL,
                           prev_curvature + max_curvature_rate * DT_CTRL)
 
+  max_lat_accel_base = float(np.interp(v_ego, _HIGH_SPEED_LAT_BP, _MAX_LAT_ACCEL_V))
   roll_compensation = roll * ACCELERATION_DUE_TO_GRAVITY
-  max_lat_accel = MAX_LATERAL_ACCEL_NO_ROLL + roll_compensation
-  min_lat_accel = -MAX_LATERAL_ACCEL_NO_ROLL + roll_compensation
+  max_lat_accel = max_lat_accel_base + roll_compensation
+  min_lat_accel = -max_lat_accel_base + roll_compensation
   new_curvature, limited_accel = clamp(new_curvature, min_lat_accel / v_ego ** 2, max_lat_accel / v_ego ** 2)
 
   new_curvature, limited_max_curv = clamp(new_curvature, -MAX_CURVATURE, MAX_CURVATURE)
