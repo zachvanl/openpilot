@@ -76,8 +76,12 @@ GENTLE_ACCEL_RECOVERY_CRUISE_GAP = 1.5
 GENTLE_ACCEL_RECOVERY_MIN_DISTANCE = 45.0
 GENTLE_ACCEL_RECOVERY_MAX_CLOSING_SPEED = 3.0
 
-FREEWAY_FOLLOW_BONUS = 0.20
+FREEWAY_FOLLOW_BONUS = 0.30
 FREEWAY_FOLLOW_BP = [20.0, 28.0]
+
+FREEWAY_CRUISE_MATCH_DIST_BP = [60.0, 120.0]
+FREEWAY_CRUISE_MATCH_BUFFER_V = [2.0, 8.0]
+FREEWAY_CRUISE_MATCH_MIN_VLEAD = 10.0
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -433,6 +437,15 @@ class LongitudinalMpc:
                                               slow_lead_confirmed, t_follow)
     else:
       self.gentle_slow_lead_t = 0.0
+
+    if self.status and v_ego > FREEWAY_FOLLOW_BP[0]:
+      lead = radarstate.leadOne
+      if lead.status:
+        v_lead_f = max(float(lead.vLead), 0.0)
+        d_rel_f = float(lead.dRel)
+        if v_lead_f > FREEWAY_CRUISE_MATCH_MIN_VLEAD and d_rel_f < FREEWAY_CRUISE_MATCH_DIST_BP[1]:
+          cap_buffer = float(np.interp(d_rel_f, FREEWAY_CRUISE_MATCH_DIST_BP, FREEWAY_CRUISE_MATCH_BUFFER_V))
+          v_cruise = min(v_cruise, v_lead_f + cap_buffer)
 
     v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
     # TODO does this make sense when max_a is negative?

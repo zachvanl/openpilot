@@ -6,6 +6,9 @@ from openpilot.common.parameterized import parameterized_class
 from cereal import log
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  FREEWAY_CRUISE_MATCH_BUFFER_V,
+  FREEWAY_CRUISE_MATCH_DIST_BP,
+  FREEWAY_CRUISE_MATCH_MIN_VLEAD,
   FREEWAY_FOLLOW_BONUS,
   FREEWAY_FOLLOW_BP,
   GENTLE_FAR_LEAD_SPEED_MAX,
@@ -120,6 +123,24 @@ def test_freeway_follow_bonus_increases_follow_distance():
   dist_base = get_safe_obstacle_distance(30.0, t_base)
   dist_with_bonus = get_safe_obstacle_distance(30.0, t_base + FREEWAY_FOLLOW_BONUS)
   assert dist_with_bonus > dist_base
+
+
+def test_freeway_cruise_match_caps_close_lead():
+  v_lead = 28.0
+  d_rel = 60.0
+  cap = v_lead + float(np.interp(d_rel, FREEWAY_CRUISE_MATCH_DIST_BP, FREEWAY_CRUISE_MATCH_BUFFER_V))
+  assert cap < 35.0  # cruise at 78 mph would be capped well below
+
+
+def test_freeway_cruise_match_relaxes_at_distance():
+  v_lead = 28.0
+  d_rel = 120.0
+  cap = v_lead + float(np.interp(d_rel, FREEWAY_CRUISE_MATCH_DIST_BP, FREEWAY_CRUISE_MATCH_BUFFER_V))
+  assert cap > 35.0  # at max distance the buffer is large enough to not interfere
+
+
+def test_freeway_cruise_match_ignores_slow_leads():
+  assert FREEWAY_CRUISE_MATCH_MIN_VLEAD >= 10.0
 
 
 def test_clip_curvature_speed_dependent_limits():
