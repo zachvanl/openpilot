@@ -9,6 +9,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   GENTLE_DECEL_SMOOTH_DIST_BP,
   GENTLE_DECEL_SMOOTH_JERK_V,
   GENTLE_DECEL_NO_LEAD_DIST,
+  OUTPUT_DECEL_JERK_LIMIT,
+  OUTPUT_DECEL_EMERGENCY_DIST,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   FREEWAY_CRUISE_MATCH_BUFFER_V,
@@ -161,6 +163,37 @@ def test_decel_smoothing_fast_at_close_distance():
 def test_decel_smoothing_no_lead_default():
   jerk = float(np.interp(GENTLE_DECEL_NO_LEAD_DIST, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
   assert -2.0 < jerk < -1.5
+
+
+def test_universal_jerk_limit_value():
+  assert OUTPUT_DECEL_JERK_LIMIT == pytest.approx(-3.0)
+
+
+def test_universal_jerk_limit_per_cycle():
+  DT_MDL = 0.05
+  per_cycle = abs(OUTPUT_DECEL_JERK_LIMIT) * DT_MDL
+  assert per_cycle == pytest.approx(0.15)
+
+
+def test_universal_jerk_emergency_bypass():
+  assert OUTPUT_DECEL_EMERGENCY_DIST == pytest.approx(4.0)
+
+
+def test_universal_jerk_gentler_than_gentle_close():
+  jerk_gentle_close = float(np.interp(8.0, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+  assert abs(OUTPUT_DECEL_JERK_LIMIT) < abs(jerk_gentle_close)
+
+
+def test_universal_jerk_allows_strong_decel_under_1s():
+  DT_MDL = 0.05
+  prev_a = 0.0
+  target = -2.0
+  cycles = 0
+  while prev_a > target and cycles < 200:
+    min_a = prev_a + OUTPUT_DECEL_JERK_LIMIT * DT_MDL
+    prev_a = max(target, min_a)
+    cycles += 1
+  assert cycles * DT_MDL < 1.0
 
 
 def test_clip_curvature_speed_dependent_limits():

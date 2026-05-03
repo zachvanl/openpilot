@@ -30,6 +30,9 @@ GENTLE_DECEL_SMOOTH_DIST_BP = [8.0, 20.0, 50.0]
 GENTLE_DECEL_SMOOTH_JERK_V = [-6.0, -2.5, -1.5]
 GENTLE_DECEL_NO_LEAD_DIST = 40.0
 
+OUTPUT_DECEL_JERK_LIMIT = -3.0
+OUTPUT_DECEL_EMERGENCY_DIST = 4.0
+
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
@@ -198,12 +201,16 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
 
-    if gentle_lead_enabled and not self.output_should_stop and output_a_target < self.output_a_target:
+    if not self.output_should_stop and output_a_target < self.output_a_target:
       lead = sm['radarState'].leadOne
       d_rel = float(lead.dRel) if lead.status else GENTLE_DECEL_NO_LEAD_DIST
-      if d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0]:
-        jerk_limit = float(np.interp(d_rel, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
-        min_a = self.output_a_target + jerk_limit * self.dt
+      emergency = lead.status and d_rel < OUTPUT_DECEL_EMERGENCY_DIST
+
+      if not emergency:
+        base_jerk = OUTPUT_DECEL_JERK_LIMIT
+        if gentle_lead_enabled and d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0]:
+          base_jerk = float(np.interp(d_rel, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+        min_a = self.output_a_target + base_jerk * self.dt
         output_a_target = max(output_a_target, min_a)
 
     for idx in range(2):
