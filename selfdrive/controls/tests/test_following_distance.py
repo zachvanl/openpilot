@@ -5,6 +5,11 @@ from openpilot.common.parameterized import parameterized_class
 
 from cereal import log
 
+from openpilot.selfdrive.controls.lib.longitudinal_planner import (
+  GENTLE_DECEL_SMOOTH_DIST_BP,
+  GENTLE_DECEL_SMOOTH_JERK_V,
+  GENTLE_DECEL_NO_LEAD_DIST,
+)
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   FREEWAY_CRUISE_MATCH_BUFFER_V,
   FREEWAY_CRUISE_MATCH_DIST_BP,
@@ -127,20 +132,35 @@ def test_freeway_follow_bonus_increases_follow_distance():
 
 def test_freeway_cruise_match_caps_close_lead():
   v_lead = 28.0
-  d_rel = 60.0
+  d_rel = 50.0
   cap = v_lead + float(np.interp(d_rel, FREEWAY_CRUISE_MATCH_DIST_BP, FREEWAY_CRUISE_MATCH_BUFFER_V))
-  assert cap < 35.0  # cruise at 78 mph would be capped well below
+  assert cap < 30.0  # at min distance, cap is very tight (lead + 1.5)
 
 
-def test_freeway_cruise_match_relaxes_at_distance():
+def test_freeway_cruise_match_tighter_at_medium_distance():
   v_lead = 28.0
-  d_rel = 120.0
+  d_rel = 100.0
   cap = v_lead + float(np.interp(d_rel, FREEWAY_CRUISE_MATCH_DIST_BP, FREEWAY_CRUISE_MATCH_BUFFER_V))
-  assert cap > 35.0  # at max distance the buffer is large enough to not interfere
+  assert cap < 32.0  # at 100m, cap is moderate (~lead + 3.25)
 
 
 def test_freeway_cruise_match_ignores_slow_leads():
   assert FREEWAY_CRUISE_MATCH_MIN_VLEAD >= 10.0
+
+
+def test_decel_smoothing_gentle_at_far_distance():
+  jerk = float(np.interp(50.0, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+  assert jerk == pytest.approx(-1.5)
+
+
+def test_decel_smoothing_fast_at_close_distance():
+  jerk = float(np.interp(8.0, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+  assert jerk == pytest.approx(-6.0)
+
+
+def test_decel_smoothing_no_lead_default():
+  jerk = float(np.interp(GENTLE_DECEL_NO_LEAD_DIST, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+  assert -2.0 < jerk < -1.5
 
 
 def test_clip_curvature_speed_dependent_limits():

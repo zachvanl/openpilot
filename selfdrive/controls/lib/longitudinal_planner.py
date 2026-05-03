@@ -26,6 +26,10 @@ ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 PARAMS_UPDATE_PERIOD = 1.0
 
+GENTLE_DECEL_SMOOTH_DIST_BP = [8.0, 20.0, 50.0]
+GENTLE_DECEL_SMOOTH_JERK_V = [-6.0, -2.5, -1.5]
+GENTLE_DECEL_NO_LEAD_DIST = 40.0
+
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
@@ -193,6 +197,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     else:
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
+
+    if gentle_lead_enabled and not self.output_should_stop and output_a_target < self.output_a_target:
+      lead = sm['radarState'].leadOne
+      d_rel = float(lead.dRel) if lead.status else GENTLE_DECEL_NO_LEAD_DIST
+      if d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0]:
+        jerk_limit = float(np.interp(d_rel, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+        min_a = self.output_a_target + jerk_limit * self.dt
+        output_a_target = max(output_a_target, min_a)
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
