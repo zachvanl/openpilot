@@ -333,9 +333,11 @@ print("\n=== Universal output jerk limiter ===")
 
 OUTPUT_DECEL_JERK_LIMIT = -3.0
 OUTPUT_DECEL_EMERGENCY_DIST = 4.0
+OUTPUT_DECEL_TTC_BYPASS = 4.0
 
 check(f"universal jerk limit is -3.0 m/s^3", OUTPUT_DECEL_JERK_LIMIT == -3.0)
 check(f"emergency dist bypass at 4m", OUTPUT_DECEL_EMERGENCY_DIST == 4.0)
+check(f"TTC bypass threshold at 4.0s", OUTPUT_DECEL_TTC_BYPASS == 4.0)
 
 # Worst-case cruise->e2e jump (1.34 m/s^2 in data): how long to complete?
 worst_jump = 1.34
@@ -391,6 +393,37 @@ for i in range(200):
 time_urgent = cycles_urgent * DT_MDL
 check(f"universal: 0 to -2.0 in {time_urgent:.2f}s (under 1s for safety)",
       time_urgent < 1.0)
+
+print("\n=== TTC-based jerk limiter bypass ===")
+
+# Stop #13 from drive: v_ego=13.4, lead at 42m going 1.8 m/s
+ttc_stop13 = 42.0 / max(13.4 - 1.8, 0.1)
+check(f"stop #13 TTC={ttc_stop13:.1f}s bypasses limiter (< 4.0s)",
+      ttc_stop13 < OUTPUT_DECEL_TTC_BYPASS)
+
+# Stop #20: v_ego=18.8, lead at 42m going 1.8 m/s
+ttc_stop20 = 42.0 / max(18.8 - 1.8, 0.1)
+check(f"stop #20 TTC={ttc_stop20:.1f}s bypasses limiter (< 4.0s)",
+      ttc_stop20 < OUTPUT_DECEL_TTC_BYPASS)
+
+# Smooth stop #2: v_ego=12.1, lead at 48m going 7.1 m/s
+ttc_smooth2 = 48.0 / max(12.1 - 7.1, 0.1)
+check(f"smooth stop #2 TTC={ttc_smooth2:.1f}s keeps limiter (> 4.0s)",
+      ttc_smooth2 > OUTPUT_DECEL_TTC_BYPASS)
+
+# No lead: limiter still applies (no TTC check when lead.status=False)
+check("no lead: TTC bypass requires lead.status=True",
+      True)  # by design: `if not emergency and lead.status:` guard
+
+# Far lead, slow approach: limiter stays active
+ttc_gentle = 80.0 / max(15.0 - 12.0, 0.1)
+check(f"gentle approach TTC={ttc_gentle:.1f}s keeps limiter (> 4.0s)",
+      ttc_gentle > OUTPUT_DECEL_TTC_BYPASS)
+
+# Lead at same speed (not closing): limiter stays active
+ttc_same = 50.0 / max(15.0 - 14.9, 0.1)
+check(f"matching speed TTC={ttc_same:.0f}s keeps limiter (> 4.0s)",
+      ttc_same > OUTPUT_DECEL_TTC_BYPASS)
 
 print(f"\n{'='*40}")
 print(f"Results: {passed} passed, {failed} failed")

@@ -32,6 +32,7 @@ GENTLE_DECEL_NO_LEAD_DIST = 40.0
 
 OUTPUT_DECEL_JERK_LIMIT = -3.0
 OUTPUT_DECEL_EMERGENCY_DIST = 4.0
+OUTPUT_DECEL_TTC_BYPASS = 4.0
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -205,6 +206,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       lead = sm['radarState'].leadOne
       d_rel = float(lead.dRel) if lead.status else GENTLE_DECEL_NO_LEAD_DIST
       emergency = lead.status and d_rel < OUTPUT_DECEL_EMERGENCY_DIST
+
+      if not emergency and lead.status:
+        v_lead = max(float(lead.vLead), 0.0)
+        closing_speed = max(v_ego - v_lead, 0.1)
+        ttc = d_rel / closing_speed
+        if ttc < OUTPUT_DECEL_TTC_BYPASS:
+          emergency = True
 
       if not emergency:
         base_jerk = OUTPUT_DECEL_JERK_LIMIT

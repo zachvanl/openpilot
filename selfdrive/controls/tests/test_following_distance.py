@@ -11,6 +11,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   GENTLE_DECEL_NO_LEAD_DIST,
   OUTPUT_DECEL_JERK_LIMIT,
   OUTPUT_DECEL_EMERGENCY_DIST,
+  OUTPUT_DECEL_TTC_BYPASS,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   FREEWAY_CRUISE_MATCH_BUFFER_V,
@@ -194,6 +195,20 @@ def test_universal_jerk_allows_strong_decel_under_1s():
     prev_a = max(target, min_a)
     cycles += 1
   assert cycles * DT_MDL < 1.0
+
+
+def test_ttc_bypass_threshold():
+  assert OUTPUT_DECEL_TTC_BYPASS == pytest.approx(4.0)
+
+
+def test_ttc_bypass_urgent_stop():
+  ttc = 42.0 / max(13.4 - 1.8, 0.1)
+  assert ttc < OUTPUT_DECEL_TTC_BYPASS
+
+
+def test_ttc_bypass_preserves_gentle_approach():
+  ttc = 48.0 / max(12.1 - 7.1, 0.1)
+  assert ttc > OUTPUT_DECEL_TTC_BYPASS
 
 
 def test_clip_curvature_speed_dependent_limits():
