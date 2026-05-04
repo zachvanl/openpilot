@@ -611,6 +611,10 @@
     "title": "Lead Departure Alert (Beta)",
     "description": "A chime and on-screen alert (TIZI/TICI only) will play when you are stopped, and the vehicle in front of you start moving. <br>Note: This chime is only designed as a notification. It is the driver's responsibility to observe their environment and make decisions accordingly."
   },
+  "LeadHysteresis": {
+    "title": "Lead Detection Hysteresis",
+    "description": "For radarless cars (e.g. Honda CR-V 6G): prevents the lead vehicle from flickering in and out of detection. Without this, the vision model's confidence can briefly dip below 50% causing the lead to vanish for seconds, which can delay braking for stopped cars at red lights. When enabled, a detected lead is held as long as the model's confidence stays above 30% (up to 1 second). FCW is disabled on held leads. Default is off."
+  },
   "LiveDelay": {
     "title": "Live Delay",
     "description": ""

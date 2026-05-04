@@ -29,6 +29,14 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 
+# Lead hysteresis: for radarless cars, the model's prob can flicker around the
+# 0.5 threshold, causing leads to vanish for seconds at a time.  Hysteresis
+# uses a lower release threshold so a detected lead is held until the model's
+# confidence drops well below the acquire threshold.
+LEAD_ACQUIRE_PROB = 0.5
+LEAD_RELEASE_PROB = 0.3
+LEAD_HYSTERESIS_MAX_FRAMES = 20  # 1s at 20Hz — safety cap on stale holds
+
 
 class KalmanParams:
   def __init__(self, dt: float):
@@ -215,6 +223,40 @@ class RadarD:
 
     self.ready = False
 
+    # Lead hysteresis state (per lead index)
+    self.lead_hysteresis_enabled = False
+    self.prev_lead_active = [False, False]
+    self.lead_hold_frames = [0, 0]
+
+  def _apply_lead_hysteresis(self, lead_dict: dict[str, Any], lead_msg, idx: int,
+                              model_v_ego: float) -> dict[str, Any]:
+    """Apply hysteresis to prevent lead flickering on radarless cars.
+
+    When a lead is detected (prob > ACQUIRE), we track it.  If it drops below
+    ACQUIRE but stays above RELEASE, we regenerate the lead from the model's
+    current (lower-confidence) estimate rather than using stale data.  This
+    keeps the position/velocity fresh while bridging brief confidence dips.
+    """
+    prob = float(lead_msg.prob)
+
+    if lead_dict['status']:
+      self.prev_lead_active[idx] = True
+      self.lead_hold_frames[idx] = 0
+      return lead_dict
+
+    if (self.prev_lead_active[idx] and
+        prob >= LEAD_RELEASE_PROB and
+        self.lead_hold_frames[idx] < LEAD_HYSTERESIS_MAX_FRAMES):
+      self.lead_hold_frames[idx] += 1
+      held = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego)
+      held['fcw'] = False
+      held['modelProb'] = prob
+      return held
+
+    self.prev_lead_active[idx] = False
+    self.lead_hold_frames[idx] = 0
+    return lead_dict
+
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
     self.current_time = 1e-9*max(sm.logMonoTime.values())
@@ -256,8 +298,15 @@ class RadarD:
       model_v_ego = self.v_ego
     leads_v3 = sm['modelV2'].leadsV3
     if len(leads_v3) > 1:
-      self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.CP, self.CP_SP, low_speed_override=True)
-      self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.CP, self.CP_SP, low_speed_override=False)
+      lead_one = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.CP, self.CP_SP, low_speed_override=True)
+      lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.CP, self.CP_SP, low_speed_override=False)
+
+      if self.lead_hysteresis_enabled:
+        lead_one = self._apply_lead_hysteresis(lead_one, leads_v3[0], 0, model_v_ego)
+        lead_two = self._apply_lead_hysteresis(lead_two, leads_v3[1], 1, model_v_ego)
+
+      self.radar_state.leadOne = lead_one
+      self.radar_state.leadTwo = lead_two
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
@@ -285,10 +334,17 @@ def main() -> None:
   sm = messaging.SubMaster(['modelV2', 'carState', 'liveTracks'], poll='modelV2')
   pm = messaging.PubMaster(['radarState'])
 
+  params = Params()
   RD = RadarD(CP, CP_SP, CP.radarDelay)
+  RD.lead_hysteresis_enabled = params.get_bool("LeadHysteresis")
+  param_read_counter = 0
 
   while 1:
     sm.update()
+
+    param_read_counter += 1
+    if param_read_counter % 100 == 0:
+      RD.lead_hysteresis_enabled = params.get_bool("LeadHysteresis")
 
     RD.update(sm, sm['liveTracks'])
     RD.publish(pm)

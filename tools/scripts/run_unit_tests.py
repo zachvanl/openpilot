@@ -425,6 +425,69 @@ ttc_same = 50.0 / max(15.0 - 14.9, 0.1)
 check(f"matching speed TTC={ttc_same:.0f}s keeps limiter (> 4.0s)",
       ttc_same > OUTPUT_DECEL_TTC_BYPASS)
 
+print("\n=== Lead hysteresis (radard) ===")
+
+LEAD_ACQUIRE_PROB = 0.5
+LEAD_RELEASE_PROB = 0.3
+LEAD_HYSTERESIS_MAX_FRAMES = 20
+
+# Simulate hysteresis state machine
+def sim_hysteresis(probs):
+  """Returns list of (lead_active, hold_frames) per frame."""
+  prev_active = False
+  hold = 0
+  results = []
+  for p in probs:
+    if p >= LEAD_ACQUIRE_PROB:
+      prev_active = True
+      hold = 0
+      results.append((True, 0))
+    elif prev_active and p >= LEAD_RELEASE_PROB and hold < LEAD_HYSTERESIS_MAX_FRAMES:
+      hold += 1
+      results.append((True, hold))
+    else:
+      prev_active = False
+      hold = 0
+      results.append((False, 0))
+  return results
+
+# Lead at 0.6 then drops to 0.4 (above release) -- should hold
+probs1 = [0.6]*5 + [0.4]*3 + [0.6]*2
+res1 = sim_hysteresis(probs1)
+check("hysteresis: 0.6->0.4->0.6 holds through dip",
+      all(r[0] for r in res1))
+
+# Lead at 0.6 then drops to 0.2 (below release) -- should release
+probs2 = [0.6]*5 + [0.2]*3
+res2 = sim_hysteresis(probs2)
+check("hysteresis: 0.6->0.2 releases immediately",
+      res2[5][0] == False)
+
+# Lead at 0.6 then drops to 0.35 for 25 frames (exceeds max hold)
+probs3 = [0.6]*5 + [0.35]*25
+res3 = sim_hysteresis(probs3)
+held_count = sum(1 for r in res3[5:] if r[0])
+check(f"hysteresis: max hold is {LEAD_HYSTERESIS_MAX_FRAMES} frames (held {held_count})",
+      held_count == LEAD_HYSTERESIS_MAX_FRAMES)
+
+# No prior lead, prob at 0.4 -- should NOT acquire
+probs4 = [0.4]*10
+res4 = sim_hysteresis(probs4)
+check("hysteresis: 0.4 without prior lead does not acquire",
+      all(not r[0] for r in res4))
+
+# Rapid flicker: 0.6, 0.4, 0.6, 0.4, ... -- should stay active
+probs5 = [0.6, 0.4] * 10
+res5 = sim_hysteresis(probs5)
+check("hysteresis: rapid 0.6/0.4 flicker stays active",
+      all(r[0] for r in res5))
+
+# Lead acquired then drops to 0.35, recovers to 0.55 -- hold count resets
+probs6 = [0.7]*3 + [0.35]*5 + [0.55]*3
+res6 = sim_hysteresis(probs6)
+check("hysteresis: hold resets when prob re-acquires above 0.5",
+      all(r[0] for r in res6) and res6[8][1] == 0)
+
 print(f"\n{'='*40}")
 print(f"Results: {passed} passed, {failed} failed")
 if failed:
