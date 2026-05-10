@@ -665,6 +665,27 @@
       }
     ]
   },
+  "LongitudinalTFollowAggressive": {
+    "title": "Follow time: Aggressive personality",
+    "description": "Time headway (seconds) when Driving Personality is Aggressive. Lower = closer following. Clamped 0.80–2.20 s in the planner. Default 1.25. Freeway bonus (up to +0.30 s) still applies when a lead is present.",
+    "min": 0.8,
+    "max": 2.2,
+    "step": 0.05
+  },
+  "LongitudinalTFollowStandard": {
+    "title": "Follow time: Standard personality",
+    "description": "Time headway (seconds) when Driving Personality is Standard. Default 1.45.",
+    "min": 0.8,
+    "max": 2.2,
+    "step": 0.05
+  },
+  "LongitudinalTFollowRelaxed": {
+    "title": "Follow time: Relaxed personality",
+    "description": "Time headway (seconds) when Driving Personality is Relaxed. Default 1.75.",
+    "min": 0.8,
+    "max": 2.2,
+    "step": 0.05
+  },
   "Mads": {
     "title": "MADS Enabled",
     "description": ""

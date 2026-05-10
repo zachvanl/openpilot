@@ -77,17 +77,26 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.gentle_lead_braking = False
     self.gentle_lead_braking_far_lead = True
     self.gentle_lead_braking_level = 50
+    self.t_follow_overrides: tuple[float, float, float] | None = None
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
 
     self.update_gentle_lead_braking_params()
+    self.update_t_follow_params()
 
   def update_gentle_lead_braking_params(self):
     self.gentle_lead_braking = self.params.get_bool("GentleLeadBraking")
     self.gentle_lead_braking_far_lead = self.params.get_bool("GentleLeadBrakingFarLead")
     self.gentle_lead_braking_level = int(np.clip(self.params.get("GentleLeadBrakingLevel", return_default=True), 0, 100))
+
+  def update_t_follow_params(self):
+    self.t_follow_overrides = (
+      float(self.params.get("LongitudinalTFollowAggressive", return_default=True)),
+      float(self.params.get("LongitudinalTFollowStandard", return_default=True)),
+      float(self.params.get("LongitudinalTFollowRelaxed", return_default=True)),
+    )
 
   @staticmethod
   def parse_model(model_msg):
@@ -114,6 +123,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.frame += 1
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.update_gentle_lead_braking_params()
+      self.update_t_follow_params()
 
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -171,7 +181,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
     self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality,
                     gentle_lead_enabled=gentle_lead_enabled, gentle_lead_level=self.gentle_lead_braking_level,
-                    gentle_far_lead_enabled=self.gentle_lead_braking_far_lead)
+                    gentle_far_lead_enabled=self.gentle_lead_braking_far_lead,
+                    t_follow_overrides=self.t_follow_overrides)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

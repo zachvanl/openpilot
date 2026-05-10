@@ -227,6 +227,14 @@ def test_clip_curvature_roll_compensation_highway():
   assert abs(curv_banked) > abs(curv_flat)
 
 
+def test_get_t_follow_param_overrides():
+  assert get_T_FOLLOW(log.LongitudinalPersonality.aggressive, (1.0, 1.45, 1.75)) == pytest.approx(1.0)
+  assert get_T_FOLLOW(log.LongitudinalPersonality.standard, (1.25, 1.1, 1.75)) == pytest.approx(1.1)
+  assert get_T_FOLLOW(log.LongitudinalPersonality.relaxed, (1.25, 1.45, 1.9)) == pytest.approx(1.9)
+  assert get_T_FOLLOW(log.LongitudinalPersonality.aggressive, (0.5, 1.45, 1.75)) == pytest.approx(0.80)  # clamped
+  assert get_T_FOLLOW(log.LongitudinalPersonality.relaxed, (1.25, 1.45, 3.0)) == pytest.approx(2.20)
+
+
 @parameterized_class(("e2e", "personality", "speed"), itertools.product(
                       [True, False], # e2e
                       [log.LongitudinalPersonality.relaxed, # personality
