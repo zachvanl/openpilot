@@ -470,10 +470,10 @@ held_count = sum(1 for r in res3[5:] if r[0])
 check(f"hysteresis: max hold is {LEAD_HYSTERESIS_MAX_FRAMES} frames (held {held_count})",
       held_count == LEAD_HYSTERESIS_MAX_FRAMES)
 
-# No prior lead, prob at 0.4 -- should NOT acquire
+# Legacy hold-only sim: 0.4 without prior lead does not acquire (early-acquire is in radard.py)
 probs4 = [0.4]*10
 res4 = sim_hysteresis(probs4)
-check("hysteresis: 0.4 without prior lead does not acquire",
+check("hysteresis hold-only sim: 0.4 without prior lead does not acquire",
       all(not r[0] for r in res4))
 
 # Rapid flicker: 0.6, 0.4, 0.6, 0.4, ... -- should stay active

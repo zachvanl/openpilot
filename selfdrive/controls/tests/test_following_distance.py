@@ -12,6 +12,14 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   OUTPUT_DECEL_JERK_LIMIT,
   OUTPUT_DECEL_EMERGENCY_DIST,
   OUTPUT_DECEL_TTC_BYPASS,
+  CITY_DECEL_TTC_BYPASS,
+  CITY_FAR_DECEL_TTC,
+  CITY_JERK_BYPASS_TTC,
+  CITY_COMFORT_DECEL_CAP,
+  city_closing_brake_active,
+  city_far_decel_floor,
+  city_imminent_collision,
+  cap_v_cruise_for_slow_lead,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   FREEWAY_CRUISE_MATCH_BUFFER_V,
@@ -209,6 +217,52 @@ def test_ttc_bypass_urgent_stop():
 def test_ttc_bypass_preserves_gentle_approach():
   ttc = 48.0 / max(12.1 - 7.1, 0.1)
   assert ttc > OUTPUT_DECEL_TTC_BYPASS
+
+
+def test_city_ttc_bypass_more_lenient_than_highway():
+  assert CITY_DECEL_TTC_BYPASS > OUTPUT_DECEL_TTC_BYPASS
+
+
+def test_city_jerk_bypass_matches_highway():
+  assert CITY_JERK_BYPASS_TTC == OUTPUT_DECEL_TTC_BYPASS
+
+
+def test_city_far_decel_floor_stronger_when_close():
+  assert city_far_decel_floor(55.0) < city_far_decel_floor(90.0)
+
+
+def test_city_comfort_cap_limits_emergency():
+  assert CITY_COMFORT_DECEL_CAP > -3.5
+
+
+def test_city_imminent_collision():
+  assert city_imminent_collision(10.0, 5.0, True)
+  assert city_imminent_collision(20.0, 2.0, True)
+  assert not city_imminent_collision(30.0, 5.0, True)
+
+
+class _LeadStub:
+  def __init__(self, status, d_rel, v_lead):
+    self.status = status
+    self.dRel = d_rel
+    self.vLead = v_lead
+
+
+def test_city_closing_brake_active_slow_lead():
+  lead = _LeadStub(True, 40.0, 1.0)
+  assert city_closing_brake_active(lead, 15.0)
+
+
+def test_city_closing_brake_inactive_highway_speed():
+  lead = _LeadStub(True, 40.0, 1.0)
+  assert not city_closing_brake_active(lead, 30.0)
+
+
+def test_cap_v_cruise_for_slow_lead():
+  lead = _LeadStub(True, 25.0, 2.0)
+  capped = cap_v_cruise_for_slow_lead(20.0, lead, 15.0)
+  assert capped < 20.0
+  assert capped >= 2.0
 
 
 def test_clip_curvature_speed_dependent_limits():

@@ -33,6 +33,53 @@ GENTLE_DECEL_NO_LEAD_DIST = 40.0
 OUTPUT_DECEL_JERK_LIMIT = -3.0
 OUTPUT_DECEL_EMERGENCY_DIST = 4.0
 OUTPUT_DECEL_TTC_BYPASS = 4.0
+# Jerk-limit bypass uses the same TTC at city and highway; far city braking uses separate floors/caps.
+CITY_JERK_BYPASS_TTC = 4.0
+CITY_FAR_DECEL_TTC = 8.0
+CITY_COMFORT_DECEL_CAP = -2.8
+CITY_IMMINENT_TTC = 2.5
+CITY_IMMINENT_DIST = 15.0
+# Back-compat alias for tests/tools that referenced the old combined constant.
+CITY_DECEL_TTC_BYPASS = CITY_FAR_DECEL_TTC
+
+CITY_STOP_MAX_V_EGO = 14.0  # m/s (~31 mph)
+CITY_STOP_MAX_V_LEAD = 2.5
+CITY_STOP_MAX_D_REL = 50.0
+CITY_FOLLOW_CAP_MAX_V_EGO = 22.0  # m/s (~49 mph)
+CITY_FOLLOW_CAP_MAX_V_LEAD = 5.0
+CITY_FOLLOW_CAP_MAX_D_REL = 100.0
+CITY_CLOSING_MIN_SPEED = 2.0  # m/s closing rate to treat as urgent
+
+
+def city_closing_brake_active(lead, v_ego: float) -> bool:
+  if lead is None or not lead.status:
+    return False
+  v_lead = max(float(lead.vLead), 0.0)
+  d_rel = float(lead.dRel)
+  closing = v_ego - v_lead
+  return (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and v_lead < CITY_FOLLOW_CAP_MAX_V_LEAD and
+          d_rel < CITY_FOLLOW_CAP_MAX_D_REL and closing > CITY_CLOSING_MIN_SPEED)
+
+
+def cap_v_cruise_for_slow_lead(v_cruise: float, lead, v_ego: float) -> float:
+  if lead is None or not lead.status or v_ego >= CITY_FOLLOW_CAP_MAX_V_EGO:
+    return v_cruise
+  v_lead = max(float(lead.vLead), 0.0)
+  d_rel = float(lead.dRel)
+  if v_lead >= CITY_FOLLOW_CAP_MAX_V_LEAD or d_rel >= CITY_FOLLOW_CAP_MAX_D_REL:
+    return v_cruise
+  buffer = float(np.interp(d_rel, [8.0, 25.0, 60.0, 100.0], [0.0, 1.5, 5.0, 10.0]))
+  return min(v_cruise, max(v_lead + buffer, 0.5))
+
+
+def city_imminent_collision(d_rel: float, ttc: float, lead_status: bool) -> bool:
+  if not lead_status:
+    return False
+  return d_rel < CITY_IMMINENT_DIST or ttc < CITY_IMMINENT_TTC
+
+
+def city_far_decel_floor(d_rel: float) -> float:
+  return float(np.interp(d_rel, [30.0, 60.0, 100.0], [-2.5, -2.0, -1.0]))
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -166,16 +213,21 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       clipped_accel_coast_interp = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [accel_clip[1], clipped_accel_coast])
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
 
+    lead_one = sm['radarState'].leadOne
+
     # Get new v_cruise and a_desired from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
+    v_cruise = cap_v_cruise_for_slow_lead(v_cruise, lead_one, v_ego)
 
     if force_slow_decel:
       v_cruise = 0.0
 
     gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking and not reset_state
     gentle_at_city_speed = v_ego < GENTLE_FAR_LEAD_SPEED_MAX
-    gentle_accel_recovery = gentle_lead_enabled and gentle_at_city_speed and should_relax_gentle_lead_for_accel(v_cruise, v_ego, sm['radarState'].leadOne)
-    gentle_lead_smoothing_enabled = gentle_lead_enabled and gentle_at_city_speed and not gentle_accel_recovery
+    urgent_city_close = city_closing_brake_active(lead_one, v_ego)
+    gentle_accel_recovery = gentle_lead_enabled and gentle_at_city_speed and should_relax_gentle_lead_for_accel(v_cruise, v_ego, lead_one)
+    gentle_lead_smoothing_enabled = (gentle_lead_enabled and gentle_at_city_speed and not gentle_accel_recovery and
+                                     not urgent_city_close)
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
                          gentle_lead_enabled=gentle_lead_smoothing_enabled, gentle_lead_level=self.gentle_lead_braking_level)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
@@ -213,8 +265,27 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
 
+    lead = lead_one
+    if self.is_e2e(sm) and lead.status:
+      v_lead = max(float(lead.vLead), 0.0)
+      d_rel = float(lead.dRel)
+      if v_ego < CITY_STOP_MAX_V_EGO and v_lead < CITY_STOP_MAX_V_LEAD and d_rel < CITY_STOP_MAX_D_REL:
+        self.output_should_stop = True
+        output_a_target = min(output_a_target, -1.5)
+    if self.is_e2e(sm) and (output_should_stop_e2e or (v_ego < 10.0 and output_a_target_e2e < -1.0)):
+      self.output_should_stop = True
+      output_a_target = min(output_a_target, output_a_target_e2e)
+
+    if self.is_e2e(sm) and lead.status and city_closing_brake_active(lead, v_ego):
+      v_lead = max(float(lead.vLead), 0.0)
+      d_rel = float(lead.dRel)
+      output_a_target = min(output_a_target, city_far_decel_floor(d_rel))
+      closing_speed = max(v_ego - v_lead, 0.1)
+      ttc = d_rel / closing_speed
+      if not city_imminent_collision(d_rel, ttc, lead.status):
+        output_a_target = max(output_a_target, CITY_COMFORT_DECEL_CAP)
+
     if not self.output_should_stop and output_a_target < self.output_a_target:
-      lead = sm['radarState'].leadOne
       d_rel = float(lead.dRel) if lead.status else GENTLE_DECEL_NO_LEAD_DIST
       emergency = lead.status and d_rel < OUTPUT_DECEL_EMERGENCY_DIST
 
@@ -222,12 +293,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         v_lead = max(float(lead.vLead), 0.0)
         closing_speed = max(v_ego - v_lead, 0.1)
         ttc = d_rel / closing_speed
-        if ttc < OUTPUT_DECEL_TTC_BYPASS:
+        ttc_bypass = CITY_JERK_BYPASS_TTC if v_ego < GENTLE_FAR_LEAD_SPEED_MAX else OUTPUT_DECEL_TTC_BYPASS
+        if ttc < ttc_bypass:
+          emergency = True
+        elif (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and city_closing_brake_active(lead, v_ego) and
+              ttc < CITY_FAR_DECEL_TTC):
           emergency = True
 
       if not emergency:
         base_jerk = OUTPUT_DECEL_JERK_LIMIT
-        if gentle_lead_enabled and d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0]:
+        urgent_city_close = city_closing_brake_active(lead, v_ego)
+        if gentle_lead_enabled and d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0] and not urgent_city_close:
           base_jerk = float(np.interp(d_rel, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
         min_a = self.output_a_target + base_jerk * self.dt
         output_a_target = max(output_a_target, min_a)

@@ -11,8 +11,65 @@ from openpilot.selfdrive.test.process_replay.process_replay import CONFIGS, FAKE
                                                                    check_openpilot_enabled, check_most_messages_valid, get_custom_params_from_lr
 from openpilot.selfdrive.test.update_ci_routes import upload_route
 from openpilot.tools.lib.framereader import FrameReader
-from openpilot.tools.lib.logreader import LogReader, LogIterable, save_log
+from openpilot.tools.lib.logreader import LogReader, LogIterable, LogsUnavailable, save_log
 from openpilot.tools.lib.openpilotci import get_url
+
+
+# Params required by fork longitudinal / radard code during replay (subset of initData).
+_FORK_REPLAY_KEYS = {
+  "LeadHysteresis", "GentleLeadBraking", "GentleLeadBrakingFarLead", "GentleLeadBrakingLevel",
+  "ExperimentalMode", "AlphaLongitudinalEnabled", "DynamicExperimentalControl",
+  "LongitudinalTFollowAggressive", "LongitudinalTFollowStandard", "LongitudinalTFollowRelaxed",
+  "SmartCruiseControlVision", "SmartCruiseControlMap",
+}
+_FORK_BOOL_KEYS = {
+  "LeadHysteresis", "GentleLeadBraking", "GentleLeadBrakingFarLead",
+  "ExperimentalMode", "AlphaLongitudinalEnabled", "DynamicExperimentalControl",
+  "SmartCruiseControlVision", "SmartCruiseControlMap",
+}
+_FORK_INT_KEYS = {"GentleLeadBrakingLevel"}
+_FORK_FLOAT_KEYS = {
+  "LongitudinalTFollowAggressive", "LongitudinalTFollowStandard", "LongitudinalTFollowRelaxed",
+}
+
+
+def get_logged_params_from_lr(lr: LogIterable) -> dict[str, Any]:
+  """Restore fork Params from initData with correct types for replay setup."""
+  for msg in lr:
+    if msg.which() == "initData":
+      out: dict[str, Any] = {}
+      for entry in msg.initData.params.entries:
+        key = entry.key
+        if key not in _FORK_REPLAY_KEYS:
+          continue
+        raw = bytes(entry.value)
+        text = raw.decode("utf-8", errors="replace")
+        if key in _FORK_BOOL_KEYS:
+          out[key] = raw == b"1"
+        elif key in _FORK_INT_KEYS:
+          out[key] = int(text)
+        elif key in _FORK_FLOAT_KEYS:
+          out[key] = float(text)
+        else:
+          out[key] = text
+      return out
+  return {}
+
+
+def apply_fork_params_from_lr(lr: LogIterable) -> None:
+  """Write fork params into the replay Params store (not custom_params blobs)."""
+  from openpilot.common.params import Params
+
+  params = Params()
+  for key, val in get_logged_params_from_lr(lr).items():
+    if isinstance(val, bool):
+      params.put_bool(key, val)
+    elif isinstance(val, (int, float)):
+      params.put(key, val)
+    elif isinstance(val, str):
+      params.put(key, val.encode())
+    else:
+      params.put(key, val)
 
 
 def regen_segment(
@@ -21,6 +78,7 @@ def regen_segment(
 ) -> list[capnp._DynamicStructReader]:
   all_msgs = sorted(lr, key=lambda m: m.logMonoTime)
   custom_params = get_custom_params_from_lr(all_msgs)
+  apply_fork_params_from_lr(all_msgs)
 
   print("Replayed processes:", [p.proc_name for p in processes])
   print("\n\n", "*"*30, "\n\n", sep="")
@@ -33,7 +91,10 @@ def regen_segment(
 def setup_data_readers(
     route: str, sidx: int, needs_driver_cam: bool = True, needs_road_cam: bool = True, dummy_driver_cam: bool = False
 ) -> tuple[LogReader, dict[str, Any]]:
-  lr = LogReader(f"{route}/{sidx}/r")
+  try:
+    lr = LogReader(f"{route}/{sidx}/r")
+  except LogsUnavailable:
+    lr = LogReader(f"{route}/{sidx}/q")
   frs = {}
   if needs_road_cam:
     frs['roadCameraState'] = FrameReader(get_url(route, str(sidx), "fcamera.hevc"))

@@ -34,8 +34,12 @@ RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 # uses a lower release threshold so a detected lead is held until the model's
 # confidence drops well below the acquire threshold.
 LEAD_ACQUIRE_PROB = 0.5
+LEAD_VISION_ACQUIRE_PROB = 0.35  # vision-only when no radar track (UI often shows lead earlier)
 LEAD_RELEASE_PROB = 0.3
-LEAD_HYSTERESIS_MAX_FRAMES = 20  # 1s at 20Hz — safety cap on stale holds
+LEAD_HYSTERESIS_MAX_FRAMES = 20  # 1s at 20Hz — safety cap on stale holds at low speed
+LEAD_HYSTERESIS_MAX_FRAMES_HIGH_SPEED = 50  # 2.5s at 20Hz — longer hold when closing fast
+LEAD_HYSTERESIS_HIGH_SPEED_V = 15.0  # m/s (~34 mph)
+LEAD_EARLY_ACQUIRE_MIN_X = 2.0  # ignore model leads closer than bumper noise
 
 
 class KalmanParams:
@@ -171,7 +175,7 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, CP: structs.CarParams, CP_SP: structs.CarParamsSP, low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
-  if len(tracks) > 0 and ready and lead_msg.prob > .5:
+  if len(tracks) > 0 and ready and lead_msg.prob > LEAD_ACQUIRE_PROB:
     track = match_vision_to_track(v_ego, lead_msg, tracks)
   else:
     track = None
@@ -180,8 +184,9 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   if track is not None:
     lead_dict = track.get_RadarState(lead_msg.prob)
     lead_dict = get_custom_yrel(CP, CP_SP, lead_dict, lead_msg)
-  elif (track is None) and ready and (lead_msg.prob > .5):
-    lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
+  elif (track is None) and ready and (lead_msg.prob >= LEAD_VISION_ACQUIRE_PROB) and len(lead_msg.x) > 0:
+    if float(lead_msg.x[0]) > LEAD_EARLY_ACQUIRE_MIN_X:
+      lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   if low_speed_override:
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
@@ -238,15 +243,27 @@ class RadarD:
     keeps the position/velocity fresh while bridging brief confidence dips.
     """
     prob = float(lead_msg.prob)
+    max_hold_frames = (LEAD_HYSTERESIS_MAX_FRAMES_HIGH_SPEED if self.v_ego > LEAD_HYSTERESIS_HIGH_SPEED_V
+                       else LEAD_HYSTERESIS_MAX_FRAMES)
 
     if lead_dict['status']:
       self.prev_lead_active[idx] = True
       self.lead_hold_frames[idx] = 0
       return lead_dict
 
+    # Radarless cars: acquire vision leads below 0.5 so MPC sees stopped traffic earlier.
+    if (not lead_dict['status'] and prob >= LEAD_RELEASE_PROB and len(lead_msg.x) > 0 and
+        float(lead_msg.x[0]) > LEAD_EARLY_ACQUIRE_MIN_X):
+      acquired = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego)
+      acquired['fcw'] = False
+      acquired['modelProb'] = prob
+      self.prev_lead_active[idx] = True
+      self.lead_hold_frames[idx] = 0
+      return acquired
+
     if (self.prev_lead_active[idx] and
         prob >= LEAD_RELEASE_PROB and
-        self.lead_hold_frames[idx] < LEAD_HYSTERESIS_MAX_FRAMES):
+        self.lead_hold_frames[idx] < max_hold_frames):
       self.lead_hold_frames[idx] += 1
       held = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego)
       held['fcw'] = False

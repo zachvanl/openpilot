@@ -151,3 +151,26 @@ class TestVCruiseHelper:
           self.enable(float(v_ego), experimental_mode, dynamic_experimental_control)
           assert V_CRUISE_INITIAL <= self.v_cruise_helper.v_cruise_kph <= V_CRUISE_MAX
           assert self.v_cruise_helper.v_cruise_initialized
+
+  def test_initialize_uses_current_speed_not_experimental_default(self):
+    """Experimental mode must not jump to 105 kph (~65 mph) on engage."""
+    v_ego = 30. * CV.MPH_TO_MS
+    self.reset_cruise_speed_state()
+    self.v_cruise_helper.get_minimum_set_speed(is_metric=False)
+    self.v_cruise_helper.initialize_v_cruise(car.CarState(vEgo=v_ego), True, False)
+    expected_kph = round(v_ego * CV.MS_TO_KPH, 1)
+    assert self.v_cruise_helper.v_cruise_kph == pytest.approx(expected_kph, abs=0.2)
+
+  def test_initialize_speed_limit_option(self):
+    v_ego = 30. * CV.MPH_TO_MS
+    self.v_cruise_helper.has_speed_limit = True
+    self.v_cruise_helper.speed_limit_final_last_kph = 45.0
+    self.v_cruise_helper.get_minimum_set_speed(is_metric=False)
+
+    def _set_speed(CS):
+      assert self.v_cruise_helper.has_speed_limit
+      return 45.0
+
+    self.v_cruise_helper.get_engaged_cruise_set_speed_kph = _set_speed
+    self.v_cruise_helper.initialize_v_cruise(car.CarState(vEgo=v_ego), False, False)
+    assert self.v_cruise_helper.v_cruise_kph == 45.0

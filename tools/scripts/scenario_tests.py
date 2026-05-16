@@ -6,6 +6,7 @@ that our control logic produces the expected improvements.
 """
 import sys
 import json
+from pathlib import Path
 import numpy as np
 
 passed = 0
@@ -486,6 +487,140 @@ check(f"all transitions settle within 1s (max {max(all_settle):.2f}s)",
       max(all_settle) <= 1.0)
 
 scenarios.append({"name": "Source Transition Smoothing", "data": scenario7_data})
+
+# ═══════════════════════════════════════
+# ROUTE REGRESSION SCENARIOS (from real drives)
+# Regenerate: .venv/Scripts/python.exe tools/scripts/extract_route_scenarios.py
+# ═══════════════════════════════════════
+
+ROUTE_SCENARIOS_PATH = Path(__file__).resolve().parent / "route_scenarios.json"
+
+
+def _frames_before_emergency(timeline, a_emergency=-3.4):
+  emergency_idx = next((i for i, f in enumerate(timeline) if f["a_target"] <= a_emergency), None)
+  if emergency_idx is None:
+    return None, []
+  return emergency_idx, timeline[:emergency_idx]
+
+
+def validate_late_emergency_brake(scenario):
+  """Require meaningful braking before MPC emergency clip (-3.5)."""
+  timeline = scenario["timeline"]
+  emergency_idx, before = _frames_before_emergency(timeline)
+  if emergency_idx is None:
+    return False, "no emergency decel frame in window"
+
+  issues = []
+
+  closing = [f for f in before if f.get("lead") and f.get("d_rel") is not None
+             and f["d_rel"] < 75 and (f.get("v_lead_mph") or 99) < 12 and f["v_ego_mph"] > 30]
+  if closing:
+    worst = min(closing, key=lambda f: f["a_target"])
+    if worst["a_target"] > -2.0:
+      issues.append(
+        f"slow-lead close: min aTarget={worst['a_target']:+.2f} at t={worst['t_offset']:+.1f}s "
+        f"d={worst['d_rel']:.0f}m v_lead={worst.get('v_lead_mph')}mph"
+      )
+
+  no_lead_fast = [f for f in before if not f.get("lead") and f["v_ego_mph"] > 40]
+  if no_lead_fast:
+    worst = max(no_lead_fast, key=lambda f: f["a_target"])
+    if worst["a_target"] > -0.8:
+      issues.append(
+        f"no-lead cruise: aTarget={worst['a_target']:+.2f} at t={worst['t_offset']:+.1f}s "
+        f"v={worst['v_ego_mph']:.0f}mph"
+      )
+
+  if issues:
+    return False, "; ".join(issues)
+  return True, "adequate pre-emergency braking"
+
+
+def validate_red_light_no_stop(scenario):
+  """At low speed while engaged, plan or model should request a stop before rolling through."""
+  timeline = scenario["timeline"]
+  low_speed = [f for f in timeline if f["op_active"] and f["v_ego_mph"] < 18]
+  if len(low_speed) < 3:
+    return True, "not enough low-speed engaged samples"
+
+  has_stop_intent = any(
+    f["should_stop"] or f.get("model_should_stop") or f["a_target"] <= -1.5
+    for f in low_speed
+  )
+  if has_stop_intent:
+    return True, "stop intent present"
+
+  worst = max(low_speed, key=lambda f: f["a_target"])
+  detail = (f"no stop intent; peak aTarget={worst['a_target']:+.2f} at v={worst['v_ego_mph']:.0f}mph "
+            f"lead={worst.get('lead')} d={worst.get('d_rel')}")
+  return False, detail
+
+
+def validate_no_lead_before_brake(scenario):
+  """High speed with no lead should not cruise with positive accel into a panic brake."""
+  timeline = scenario["timeline"]
+  emergency_idx, before = _frames_before_emergency(timeline, a_emergency=-2.5)
+  if emergency_idx is None:
+    return True, "no panic brake in window"
+
+  no_lead_fast = [f for f in before if not f.get("lead") and f["v_ego_mph"] > 40]
+  if not no_lead_fast:
+    return True, "no no-lead high-speed samples"
+
+  worst = max(no_lead_fast, key=lambda f: f["a_target"])
+  ok = worst["a_target"] <= 0.0
+  detail = f"no-lead cruise peak aTarget={worst['a_target']:+.2f} at v={worst['v_ego_mph']:.0f}mph"
+  return ok, detail
+
+
+ROUTE_VALIDATORS = {
+  "late_emergency_brake": validate_late_emergency_brake,
+  "red_light_no_stop": validate_red_light_no_stop,
+  "no_lead_before_brake": validate_no_lead_before_brake,
+  "fcw_alert": lambda s: (any(f["fcw"] or f.get("hard_brake") for f in s["timeline"]),
+                          "fcw or hardBrakePredicted seen"),
+}
+
+
+route_regression = []
+if ROUTE_SCENARIOS_PATH.is_file():
+  with open(ROUTE_SCENARIOS_PATH) as f:
+    route_registry = json.load(f)
+
+  print("\n" + "=" * 70)
+  print(f"ROUTE REGRESSION SCENARIOS ({len(route_registry.get('scenarios', []))} from logs)")
+  print("=" * 70)
+
+  by_type = {}
+  for sc in route_registry.get("scenarios", []):
+    by_type.setdefault(sc["type"], []).append(sc)
+
+  for scenario_type, validator in ROUTE_VALIDATORS.items():
+    items = by_type.get(scenario_type, [])
+    print(f"\n--- {scenario_type} ({len(items)} windows) ---")
+    type_pass = 0
+    for sc in items:
+      ok, detail = validator(sc)
+      name = sc["name"]
+      if ok:
+        type_pass += 1
+      check(f"{name}: {detail}", ok)
+      route_regression.append({
+        "name": name,
+        "route": sc["route"],
+        "segment": sc["segment"],
+        "type": scenario_type,
+        "passed": ok,
+        "detail": detail,
+        "summary": sc.get("summary", {}),
+      })
+    if items:
+      print(f"  {type_pass}/{len(items)} windows passed for {scenario_type}")
+else:
+  print(f"\nSkipping route scenarios: {ROUTE_SCENARIOS_PATH} not found")
+  print("Run: .venv/Scripts/python.exe tools/scripts/extract_route_scenarios.py")
+
+scenarios.append({"name": "Route Regression Summary", "data": {"results": route_regression}})
 
 # ═══════════════════════════════════════
 # Output JSON for canvas visualization

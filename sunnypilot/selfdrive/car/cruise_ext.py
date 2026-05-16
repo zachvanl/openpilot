@@ -15,6 +15,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist 
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target
 
 ButtonType = car.CarState.ButtonEvent.Type
+_CRUISE_SET_STANDSTILL_MIN_KPH = 40.  # match V_CRUISE_INITIAL in selfdrive/car/cruise.py
 SpeedLimitAssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 
 CRUISE_BUTTON_TIMER = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0,
@@ -136,3 +137,14 @@ class VCruiseHelperSP:
 
     self.prev_sla_state = self.sla_state
     self.prev_speed_limit_final_last_kph = self.speed_limit_final_last_kph
+
+  def get_engaged_cruise_set_speed_kph(self, CS: car.CarState) -> float:
+    """Speed to use when openpilot longitudinal first engages (stock ACC SET = current speed)."""
+    if self.params.get_bool("CruiseSetUseSpeedLimit") and self.has_speed_limit:
+      return float(np.clip(round(self.speed_limit_final_last_kph, 1), self.v_cruise_min, V_CRUISE_MAX))
+
+    v_ego_kph = CS.vEgo * CV.MS_TO_KPH
+    if v_ego_kph < _CRUISE_SET_STANDSTILL_MIN_KPH:
+      v_ego_kph = _CRUISE_SET_STANDSTILL_MIN_KPH
+    floor = self.v_cruise_min if self.v_cruise_min > 0. else V_CRUISE_MIN
+    return float(np.clip(round(v_ego_kph, 1), floor, V_CRUISE_MAX))
