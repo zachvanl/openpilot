@@ -5,6 +5,7 @@ from openpilot.common.parameterized import parameterized_class
 
 from cereal import log
 
+from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   GENTLE_DECEL_SMOOTH_DIST_BP,
   GENTLE_DECEL_SMOOTH_JERK_V,
@@ -16,10 +17,15 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CITY_FAR_DECEL_TTC,
   CITY_JERK_BYPASS_TTC,
   CITY_COMFORT_DECEL_CAP,
+  CITY_CLOSE_DECEL_CAP,
   city_closing_brake_active,
+  city_closing_decel_jerk,
+  city_comfort_decel_limit,
   city_far_decel_floor,
   city_imminent_collision,
+  city_urgent_mpc_disable,
   cap_v_cruise_for_slow_lead,
+  OUTPUT_DECEL_EMERGENCY_DIST,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   FREEWAY_CRUISE_MATCH_BUFFER_V,
@@ -227,12 +233,31 @@ def test_city_jerk_bypass_matches_highway():
   assert CITY_JERK_BYPASS_TTC == OUTPUT_DECEL_TTC_BYPASS
 
 
-def test_city_far_decel_floor_stronger_when_close():
-  assert city_far_decel_floor(55.0) < city_far_decel_floor(90.0)
+def test_city_far_decel_floor_stronger_when_far():
+  assert city_far_decel_floor(30.0) < city_far_decel_floor(90.0)
 
 
 def test_city_comfort_cap_limits_emergency():
   assert CITY_COMFORT_DECEL_CAP > -3.5
+  assert city_comfort_decel_limit(40.0, 6.0, True) == CITY_COMFORT_DECEL_CAP
+  assert city_comfort_decel_limit(12.0, 3.0, True) == CITY_COMFORT_DECEL_CAP
+  assert city_comfort_decel_limit(8.0, 1.0, True) == ACCEL_MIN
+
+
+def test_city_comfort_limit_smooth_near_close():
+  mid = city_comfort_decel_limit(12.0, 2.0, True)
+  assert CITY_COMFORT_DECEL_CAP >= mid >= CITY_CLOSE_DECEL_CAP
+
+
+def test_city_closing_decel_jerk_moderate_mid_ttc():
+  assert city_closing_decel_jerk(6.0, 30.0, 15.0) == -2.0
+  assert city_closing_decel_jerk(2.0, 10.0, 15.0) == OUTPUT_DECEL_JERK_LIMIT
+
+
+def test_city_urgent_mpc_only_when_close():
+  lead = _LeadStub(True, 40.0, 1.0)
+  assert not city_urgent_mpc_disable(lead, 15.0)
+  assert city_urgent_mpc_disable(_LeadStub(True, 10.0, 1.0), 15.0)
 
 
 def test_city_imminent_collision():

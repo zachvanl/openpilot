@@ -37,8 +37,12 @@ OUTPUT_DECEL_TTC_BYPASS = 4.0
 CITY_JERK_BYPASS_TTC = 4.0
 CITY_FAR_DECEL_TTC = 8.0
 CITY_COMFORT_DECEL_CAP = -2.8
+CITY_CLOSE_DECEL_CAP = -3.0
+CITY_MODERATE_DECEL_JERK = -2.0
+CITY_EMERGENCY_TTC = 1.5
 CITY_IMMINENT_TTC = 2.5
 CITY_IMMINENT_DIST = 15.0
+CITY_FAR_DECEL_FLOOR_MIN_DIST = 25.0
 # Back-compat alias for tests/tools that referenced the old combined constant.
 CITY_DECEL_TTC_BYPASS = CITY_FAR_DECEL_TTC
 
@@ -79,7 +83,48 @@ def city_imminent_collision(d_rel: float, ttc: float, lead_status: bool) -> bool
 
 
 def city_far_decel_floor(d_rel: float) -> float:
-  return float(np.interp(d_rel, [30.0, 60.0, 100.0], [-2.5, -2.0, -1.0]))
+  # Encourage earlier braking when still far; do not ramp harder as gap closes.
+  return float(np.interp(d_rel, [25.0, 45.0, 80.0, 100.0], [-2.4, -2.0, -1.2, -0.8]))
+
+
+def city_comfort_decel_limit(d_rel: float, ttc: float, lead_status: bool) -> float:
+  """Soft cap on decel while following in city (less negative = gentler)."""
+  if not lead_status:
+    return ACCEL_MIN
+  if d_rel < OUTPUT_DECEL_EMERGENCY_DIST or ttc < CITY_EMERGENCY_TTC:
+    return ACCEL_MIN
+  by_ttc = float(np.interp(
+    ttc,
+    [CITY_EMERGENCY_TTC, CITY_IMMINENT_TTC, CITY_JERK_BYPASS_TTC, CITY_FAR_DECEL_TTC],
+    [CITY_CLOSE_DECEL_CAP, CITY_COMFORT_DECEL_CAP, CITY_COMFORT_DECEL_CAP, CITY_COMFORT_DECEL_CAP],
+  ))
+  by_dist = float(np.interp(
+    d_rel,
+    [OUTPUT_DECEL_EMERGENCY_DIST, CITY_IMMINENT_DIST, 35.0, 55.0],
+    [CITY_CLOSE_DECEL_CAP, CITY_COMFORT_DECEL_CAP, CITY_COMFORT_DECEL_CAP, CITY_COMFORT_DECEL_CAP],
+  ))
+  return max(by_ttc, by_dist)
+
+
+def city_closing_decel_jerk(ttc: float, d_rel: float, v_ego: float) -> float:
+  if v_ego >= GENTLE_FAR_LEAD_SPEED_MAX:
+    return OUTPUT_DECEL_JERK_LIMIT
+  if d_rel < OUTPUT_DECEL_EMERGENCY_DIST or ttc < CITY_EMERGENCY_TTC:
+    return OUTPUT_DECEL_JERK_LIMIT
+  if ttc < CITY_JERK_BYPASS_TTC:
+    return OUTPUT_DECEL_JERK_LIMIT
+  if ttc < CITY_FAR_DECEL_TTC:
+    return CITY_MODERATE_DECEL_JERK
+  return float(np.interp(d_rel, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+
+
+def city_urgent_mpc_disable(lead, v_ego: float) -> bool:
+  if not city_closing_brake_active(lead, v_ego):
+    return False
+  d_rel = float(lead.dRel)
+  v_lead = max(float(lead.vLead), 0.0)
+  ttc = d_rel / max(v_ego - v_lead, 0.1)
+  return d_rel < CITY_IMMINENT_DIST or (d_rel < 30.0 and ttc < CITY_JERK_BYPASS_TTC)
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -224,7 +269,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     gentle_lead_enabled = self.CP.openpilotLongitudinalControl and self.gentle_lead_braking and not reset_state
     gentle_at_city_speed = v_ego < GENTLE_FAR_LEAD_SPEED_MAX
-    urgent_city_close = city_closing_brake_active(lead_one, v_ego)
+    urgent_city_close = city_urgent_mpc_disable(lead_one, v_ego)
     gentle_accel_recovery = gentle_lead_enabled and gentle_at_city_speed and should_relax_gentle_lead_for_accel(v_cruise, v_ego, lead_one)
     gentle_lead_smoothing_enabled = (gentle_lead_enabled and gentle_at_city_speed and not gentle_accel_recovery and
                                      not urgent_city_close)
@@ -279,11 +324,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if self.is_e2e(sm) and lead.status and city_closing_brake_active(lead, v_ego):
       v_lead = max(float(lead.vLead), 0.0)
       d_rel = float(lead.dRel)
-      output_a_target = min(output_a_target, city_far_decel_floor(d_rel))
       closing_speed = max(v_ego - v_lead, 0.1)
       ttc = d_rel / closing_speed
-      if not city_imminent_collision(d_rel, ttc, lead.status):
-        output_a_target = max(output_a_target, CITY_COMFORT_DECEL_CAP)
+      if d_rel > CITY_FAR_DECEL_FLOOR_MIN_DIST:
+        output_a_target = min(output_a_target, city_far_decel_floor(d_rel))
+      output_a_target = max(output_a_target, city_comfort_decel_limit(d_rel, ttc, lead.status))
 
     if not self.output_should_stop and output_a_target < self.output_a_target:
       d_rel = float(lead.dRel) if lead.status else GENTLE_DECEL_NO_LEAD_DIST
@@ -296,15 +341,18 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         ttc_bypass = CITY_JERK_BYPASS_TTC if v_ego < GENTLE_FAR_LEAD_SPEED_MAX else OUTPUT_DECEL_TTC_BYPASS
         if ttc < ttc_bypass:
           emergency = True
-        elif (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and city_closing_brake_active(lead, v_ego) and
-              ttc < CITY_FAR_DECEL_TTC):
-          emergency = True
 
       if not emergency:
-        base_jerk = OUTPUT_DECEL_JERK_LIMIT
-        urgent_city_close = city_closing_brake_active(lead, v_ego)
-        if gentle_lead_enabled and d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0] and not urgent_city_close:
+        if (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and lead.status and
+            city_closing_brake_active(lead, v_ego)):
+          v_lead = max(float(lead.vLead), 0.0)
+          closing_speed = max(v_ego - v_lead, 0.1)
+          ttc = d_rel / closing_speed
+          base_jerk = city_closing_decel_jerk(ttc, d_rel, v_ego)
+        elif gentle_lead_enabled and d_rel > GENTLE_DECEL_SMOOTH_DIST_BP[0]:
           base_jerk = float(np.interp(d_rel, GENTLE_DECEL_SMOOTH_DIST_BP, GENTLE_DECEL_SMOOTH_JERK_V))
+        else:
+          base_jerk = OUTPUT_DECEL_JERK_LIMIT
         min_a = self.output_a_target + base_jerk * self.dt
         output_a_target = max(output_a_target, min_a)
 
