@@ -99,6 +99,7 @@ def is_city_established_follow(follow_t: float, cfg: CityCruiseParams | None = N
 
 
 def is_city_fast_approach(lead, v_ego: float, follow_t: float, cfg: CityCruiseParams | None = None) -> bool:
+  """Fresh catch of a slow or stopped lead while closing quickly (e.g. stop light queue)."""
   c = cfg or CityCruiseParams.defaults()
   if not c.enabled or not c.approach_enabled:
     return False
@@ -108,7 +109,7 @@ def is_city_fast_approach(lead, v_ego: float, follow_t: float, cfg: CityCruisePa
     return False
   v_lead = max(float(lead.vLead), 0.0)
   d_rel = float(lead.dRel)
-  if city_lead_stopping(v_lead) or v_lead >= CITY_FOLLOW_CAP_MAX_V_LEAD:
+  if v_lead >= CITY_FOLLOW_CAP_MAX_V_LEAD:
     return False
   closing = v_ego - v_lead
   return (c.approach_min_dist_m <= d_rel <= c.approach_max_dist_m and
@@ -211,10 +212,9 @@ def cap_v_cruise_city(v_cruise: float, lead, v_ego: float, a_ego: float, follow_
       c.approach_buffer_v,
     ))
     return min(v_cruise, max(v_lead + buffer, 0.5))
-  if city_lead_stopping(v_lead):
-    if d_rel > 18.0:
-      return v_cruise
-    buffer = float(np.interp(d_rel, [6.0, 12.0, 18.0], [0.0, 0.5, 1.0]))
+  # Close queue behind a stopped lead (not a fresh fast approach): light cap only
+  if city_lead_stopping(v_lead) and d_rel < c.approach_min_dist_m:
+    buffer = float(np.interp(d_rel, [6.0, 12.0, c.approach_min_dist_m], [0.0, 0.5, 1.5]))
     return min(v_cruise, max(v_lead + buffer, 0.5))
   return v_cruise
 

@@ -321,6 +321,16 @@ def test_city_fast_approach_window():
   assert not is_city_fast_approach(far, 15.0, 0.0)
 
 
+def test_city_fast_approach_stopped_lead_at_light():
+  """40 MPH on a fresh stopped lead ~130 ft ahead should trigger early cruise slowdown."""
+  stopped = _LeadStub(True, 40.0, 0.0)
+  v_ego_40mph = 40.0 * 0.44704
+  assert is_city_fast_approach(stopped, v_ego_40mph, 0.0)
+  capped = cap_v_cruise_city(30.0, stopped, v_ego_40mph, 0.0, 0.0)
+  assert capped < v_ego_40mph
+  assert capped <= 12.0
+
+
 def test_cap_v_cruise_fast_approach_only_before_established():
   lead = _LeadStub(True, 38.0, 4.0)
   capped = cap_v_cruise_city(20.0, lead, 15.0, 0.0, 0.0)
@@ -329,9 +339,9 @@ def test_cap_v_cruise_fast_approach_only_before_established():
   assert cap_v_cruise_city(20.0, lead, 15.0, 0.0, CITY_ESTABLISHED_FOLLOW_TIME) == 20.0
 
 
-def test_cap_v_cruise_no_far_cap_on_stopped_lead():
+def test_cap_v_cruise_no_far_cap_when_established_behind_stopped():
   lead = _LeadStub(True, 40.0, 0.0)
-  assert cap_v_cruise_city(20.0, lead, 12.0, 0.0, 0.0) == 20.0
+  assert cap_v_cruise_city(20.0, lead, 12.0, 0.0, CITY_ESTABLISHED_FOLLOW_TIME) == 20.0
 
 
 def test_city_coast_when_lead_slows_gently():

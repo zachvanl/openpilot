@@ -367,7 +367,7 @@
   },
   "CityApproachEarlySlow": {
     "title": "City: early slowdown when approaching",
-    "description": "When you are not yet established behind a lead, lowers cruise target between the min and max approach distances (feet below) if you are closing faster than the minimum closing speed. This makes openpilot ease off the throttle earlier—typically around 100–150 ft—instead of braking late. Does not apply once established follow time is reached or behind a stopped lead."
+    "description": "When you are not yet established behind a lead, lowers cruise target between the min and max approach distances (feet below) if you are closing faster than the minimum closing speed. Applies to slow and stopped leads (e.g. fresh stop-light traffic at ~40 MPH)—openpilot eases off the throttle from ~100–150 ft instead of braking late. Does not apply once established follow time is reached (then normal follow + optional coasting take over). Established follow behind a stopped car does not use the far cap, which avoids stopping unnecessarily far back."
   },
   "CityApproachMinDistFt": {
     "title": "City approach: start distance (ft)",
