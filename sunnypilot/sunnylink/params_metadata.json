@@ -361,6 +361,71 @@
     "max": 100,
     "step": 1
   },
+  "CityCruiseAssist": {
+    "title": "City Cruise Assist (master)",
+    "description": "Master switch for city follow tuning below ~50 MPH: early slowdown when closing on a lead from distance, coasting when the lead slows gently after you have been following, and optional late brake help on a moving slow lead. Turn off to restore stock cruise behavior for all sub-options."
+  },
+  "CityApproachEarlySlow": {
+    "title": "City: early slowdown when approaching",
+    "description": "When you are not yet established behind a lead, lowers cruise target between the min and max approach distances (feet below) if you are closing faster than the minimum closing speed. This makes openpilot ease off the throttle earlier—typically around 100–150 ft—instead of braking late. Does not apply once established follow time is reached or behind a stopped lead."
+  },
+  "CityApproachMinDistFt": {
+    "title": "City approach: start distance (ft)",
+    "description": "Distance to the lead (feet) where early cruise slowdown begins when City: early slowdown is on. Default 100 ft (~30 m). Must be less than max distance.",
+    "min": 50,
+    "max": 200,
+    "step": 5
+  },
+  "CityApproachMaxDistFt": {
+    "title": "City approach: full slowdown distance (ft)",
+    "description": "Distance to the lead (feet) where early cruise slowdown is strongest before you reach established follow. Default 150 ft (~46 m).",
+    "min": 60,
+    "max": 250,
+    "step": 5
+  },
+  "CityApproachMinClosingMph": {
+    "title": "City approach: minimum closing speed (mph)",
+    "description": "You must be closing on the lead at least this much faster (mph) for early slowdown to apply. Default 7 mph avoids caps when pacing the lead at similar speed.",
+    "min": 2,
+    "max": 20,
+    "step": 1
+  },
+  "CityApproachFarBufferMph": {
+    "title": "City approach: cruise cap above lead (mph)",
+    "description": "At the far end of the approach window, cruise is capped to roughly lead speed plus this many mph (scaled down closer in). Default 20 mph (~9 m/s). Lower = gentler, earlier slowdown; higher = less intrusion.",
+    "min": 5,
+    "max": 35,
+    "step": 1
+  },
+  "CityEstablishedFollowCoast": {
+    "title": "City: coast when lead slows gently",
+    "description": "After you have followed the same lead for the established time (seconds below), if the lead is only slowing gently (above the coast accel threshold), openpilot prefers coasting (no brake, no accel) instead of light braking. Reduces stop-and-go tapping in city traffic. Hard lead braking still reacts immediately."
+  },
+  "CityEstablishedFollowTimeS": {
+    "title": "City: established follow time (s)",
+    "description": "Seconds you must be in a stable gap behind the same lead before behavior switches from approach slowdown to normal personality following plus optional coasting. Default 6 s (your 5–8 s target).",
+    "min": 3,
+    "max": 15,
+    "step": 0.5
+  },
+  "CityLateBrakeAssist": {
+    "title": "City: late brake assist (moving leads)",
+    "description": "Adds extra braking only when still soft on a slow moving lead you are catching—not when established behind a stopping lead and not during the early approach window (that uses cruise cap only). Use if you still see late catch-up on rolling slow traffic; turn off if it feels too aggressive."
+  },
+  "CityCoastMaxLeadAccel": {
+    "title": "City coast: gentle lead decel (m/s²)",
+    "description": "When established follow coast is on, the lead's filtered acceleration (aLeadK) must stay above this value to allow coasting. Default -0.9 m/s² (gentle slowdown). More negative = only coast on very gentle lead decel.",
+    "min": -2.0,
+    "max": 0,
+    "step": 0.1
+  },
+  "CityHardBrakeLeadAccel": {
+    "title": "City: hard brake threshold (m/s²)",
+    "description": "If the lead's filtered acceleration (aLeadK) falls below this value, openpilot reacts immediately with full braking (jerk bypass). Default -2.0 m/s² (~0.2 s response). Raise (less negative) to trigger hard braking sooner.",
+    "min": -5.0,
+    "max": -0.5,
+    "step": 0.1
+  },
   "GsmApn": {
     "title": "GSM APN",
     "description": ""

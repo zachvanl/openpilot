@@ -489,6 +489,74 @@ check(f"all transitions settle within 1s (max {max(all_settle):.2f}s)",
 scenarios.append({"name": "Source Transition Smoothing", "data": scenario7_data})
 
 # ═══════════════════════════════════════
+# SCENARIO 8: City late-brake assist gate (stopping lead vs moving slow lead)
+# ═══════════════════════════════════════
+print("\n=== Scenario 8: City late-brake assist gate ===")
+
+# Inline gate logic (no openpilot import) — mirrors longitudinal_planner.py
+CITY_LEAD_STOPPED_SPEED = 1.5
+CITY_BRAKE_ASSIST_MAX_A_EGO = -0.8
+CITY_BRAKE_ASSIST_MIN_PLAN_DECEL = -1.2
+GENTLE_FAR_LEAD_SPEED_MAX = 23.0
+CITY_FOLLOW_CAP_MAX_V_LEAD = 5.0
+CITY_FOLLOW_CAP_MAX_D_REL = 100.0
+CITY_CLOSING_MIN_SPEED = 2.0
+
+
+def _city_lead_stopping(v_lead):
+  return v_lead < CITY_LEAD_STOPPED_SPEED
+
+
+def _city_closing_brake_active(d_rel, v_lead, v_ego):
+  if _city_lead_stopping(v_lead):
+    return False
+  closing = v_ego - v_lead
+  return (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and v_lead < CITY_FOLLOW_CAP_MAX_V_LEAD and
+          d_rel < CITY_FOLLOW_CAP_MAX_D_REL and closing > CITY_CLOSING_MIN_SPEED)
+
+
+def _needs_city_late_brake_assist(d_rel, v_lead, v_ego, a_ego, a_plan):
+  if not _city_closing_brake_active(d_rel, v_lead, v_ego):
+    return False
+  if a_ego <= CITY_BRAKE_ASSIST_MAX_A_EGO or a_plan <= CITY_BRAKE_ASSIST_MIN_PLAN_DECEL:
+    return False
+  closing = v_ego - v_lead
+  if d_rel > 18.0 and closing < 4.0:
+    return False
+  return True
+
+
+def _cap_v_cruise_for_slow_lead(v_cruise, d_rel, v_lead, v_ego, a_ego):
+  if v_lead >= CITY_FOLLOW_CAP_MAX_V_LEAD or d_rel >= CITY_FOLLOW_CAP_MAX_D_REL:
+    return v_cruise
+  if _city_lead_stopping(v_lead):
+    if d_rel > 18.0 or a_ego <= CITY_BRAKE_ASSIST_MAX_A_EGO:
+      return v_cruise
+    buffer = float(np.interp(d_rel, [6.0, 12.0, 18.0], [0.0, 0.5, 1.0]))
+    return min(v_cruise, max(v_lead + buffer, 0.5))
+  closing = v_ego - v_lead
+  if closing < 3.0 and d_rel > 22.0:
+    return v_cruise
+  if a_ego <= CITY_BRAKE_ASSIST_MAX_A_EGO:
+    return v_cruise
+  buffer = float(np.interp(d_rel, [12.0, 28.0, 55.0], [0.5, 2.0, 4.0]))
+  return min(v_cruise, max(v_lead + buffer, 0.5))
+
+
+check("stopped lead is not city closing", not _city_closing_brake_active(25.0, 0.5, 12.0))
+check("moving slow lead is city closing", _city_closing_brake_active(35.0, 3.0, 12.0))
+check("assist when late on moving slow lead", _needs_city_late_brake_assist(35.0, 3.0, 12.0, 0.0, 0.0))
+check("no assist when already braking gently on moving lead",
+      not _needs_city_late_brake_assist(35.0, 3.0, 12.0, CITY_BRAKE_ASSIST_MAX_A_EGO - 0.1, 0.0))
+check("no assist behind stopped lead", not _needs_city_late_brake_assist(25.0, 0.5, 12.0, 0.0, 0.0))
+check("no far v_cruise cap behind stopped lead at 40m",
+      _cap_v_cruise_for_slow_lead(20.0, 40.0, 0.0, 12.0, 0.0) == 20.0)
+check("no far v_cruise cap when gentle decel behind moving lead",
+      _cap_v_cruise_for_slow_lead(20.0, 40.0, 2.0, 12.0, CITY_BRAKE_ASSIST_MAX_A_EGO - 0.1) == 20.0)
+
+scenarios.append({"name": "City Late-Brake Assist Gate", "data": {}})
+
+# ═══════════════════════════════════════
 # ROUTE REGRESSION SCENARIOS (from real drives)
 # Regenerate: .venv/Scripts/python.exe tools/scripts/extract_route_scenarios.py
 # ═══════════════════════════════════════

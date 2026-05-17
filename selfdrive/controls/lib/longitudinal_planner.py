@@ -12,12 +12,19 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import should_relax_gentle_lead_for_accel, GENTLE_FAR_LEAD_SPEED_MAX
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  should_relax_gentle_lead_for_accel,
+  GENTLE_FAR_LEAD_SPEED_MAX,
+  get_safe_obstacle_distance,
+  get_stopped_equivalence_factor,
+  get_T_FOLLOW,
+)
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.selfdrive.controls.lib.city_cruise_params import CityCruiseParams
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -46,13 +53,25 @@ CITY_FAR_DECEL_FLOOR_MIN_DIST = 25.0
 # Back-compat alias for tests/tools that referenced the old combined constant.
 CITY_DECEL_TTC_BYPASS = CITY_FAR_DECEL_TTC
 
-CITY_STOP_MAX_V_EGO = 14.0  # m/s (~31 mph)
-CITY_STOP_MAX_V_LEAD = 2.5
-CITY_STOP_MAX_D_REL = 50.0
+CITY_LEAD_STOPPED_SPEED = 1.5  # m/s — lead stopping/stopped; use stock gentle follow only
+CITY_BRAKE_ASSIST_MAX_A_EGO = -0.8  # already braking gently
+CITY_BRAKE_ASSIST_MIN_PLAN_DECEL = -1.2  # plan already requesting real decel
 CITY_FOLLOW_CAP_MAX_V_EGO = 22.0  # m/s (~49 mph)
 CITY_FOLLOW_CAP_MAX_V_LEAD = 5.0
 CITY_FOLLOW_CAP_MAX_D_REL = 100.0
 CITY_CLOSING_MIN_SPEED = 2.0  # m/s closing rate to treat as urgent
+# Established follow: normal personality gap; coast if lead slows gently.
+CITY_ESTABLISHED_GAP_MARGIN = 1.25
+CITY_COAST_MAX_CLOSING = 2.5
+# Defaults for unit tests (Sunnylink: CityCruiseParams / params_keys.h).
+_DEFAULT_CITY = CityCruiseParams.defaults()
+CITY_ESTABLISHED_FOLLOW_TIME = _DEFAULT_CITY.established_follow_time
+CITY_APPROACH_MIN_DIST = _DEFAULT_CITY.approach_min_dist_m
+CITY_APPROACH_MAX_DIST = _DEFAULT_CITY.approach_max_dist_m
+
+
+def city_lead_stopping(v_lead: float) -> bool:
+  return v_lead < CITY_LEAD_STOPPED_SPEED
 
 
 def city_closing_brake_active(lead, v_ego: float) -> bool:
@@ -60,20 +79,144 @@ def city_closing_brake_active(lead, v_ego: float) -> bool:
     return False
   v_lead = max(float(lead.vLead), 0.0)
   d_rel = float(lead.dRel)
+  if city_lead_stopping(v_lead):
+    return False
   closing = v_ego - v_lead
   return (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and v_lead < CITY_FOLLOW_CAP_MAX_V_LEAD and
           d_rel < CITY_FOLLOW_CAP_MAX_D_REL and closing > CITY_CLOSING_MIN_SPEED)
 
 
-def cap_v_cruise_for_slow_lead(v_cruise: float, lead, v_ego: float) -> float:
-  if lead is None or not lead.status or v_ego >= CITY_FOLLOW_CAP_MAX_V_EGO:
+def _lead_a_lead_k(lead) -> float:
+  try:
+    return float(lead.aLeadK)
+  except Exception:
+    return 0.0
+
+
+def is_city_established_follow(follow_t: float, cfg: CityCruiseParams | None = None) -> bool:
+  c = cfg or CityCruiseParams.defaults()
+  return follow_t >= c.established_follow_time
+
+
+def is_city_fast_approach(lead, v_ego: float, follow_t: float, cfg: CityCruiseParams | None = None) -> bool:
+  c = cfg or CityCruiseParams.defaults()
+  if not c.enabled or not c.approach_enabled:
+    return False
+  if lead is None or not lead.status or is_city_established_follow(follow_t, c):
+    return False
+  if v_ego >= GENTLE_FAR_LEAD_SPEED_MAX:
+    return False
+  v_lead = max(float(lead.vLead), 0.0)
+  d_rel = float(lead.dRel)
+  if city_lead_stopping(v_lead) or v_lead >= CITY_FOLLOW_CAP_MAX_V_LEAD:
+    return False
+  closing = v_ego - v_lead
+  return (c.approach_min_dist_m <= d_rel <= c.approach_max_dist_m and
+          closing >= c.approach_min_closing)
+
+
+def lead_is_hard_braking(lead, v_ego: float, follow_t: float = 0.0, cfg: CityCruiseParams | None = None) -> bool:
+  c = cfg or CityCruiseParams.defaults()
+  if lead is None or not lead.status or not c.enabled:
+    return False
+  if _lead_a_lead_k(lead) < c.hard_brake_lead_alead:
+    return True
+  if is_city_established_follow(follow_t, c):
+    return False
+  v_lead = max(float(lead.vLead), 0.0)
+  d_rel = float(lead.dRel)
+  closing = max(v_ego - v_lead, 0.0)
+  ttc = d_rel / max(closing, 0.1)
+  return closing > 4.0 and ttc < 3.5
+
+
+def should_city_coast(lead, v_ego: float, follow_t: float, output_a_target: float,
+                      cfg: CityCruiseParams | None = None) -> bool:
+  c = cfg or CityCruiseParams.defaults()
+  if not c.enabled or not c.established_coast_enabled:
+    return False
+  if lead is None or not lead.status or not is_city_established_follow(follow_t, c):
+    return False
+  if v_ego >= GENTLE_FAR_LEAD_SPEED_MAX:
+    return False
+  v_lead = max(float(lead.vLead), 0.0)
+  if city_lead_stopping(v_lead) or lead_is_hard_braking(lead, v_ego, follow_t, c):
+    return False
+  closing = v_ego - v_lead
+  if closing > CITY_COAST_MAX_CLOSING or output_a_target > 0.2:
+    return False
+  return _lead_a_lead_k(lead) > c.coast_max_lead_alead
+
+
+def update_city_lead_follow_t(follow_t: float, lead, v_ego: float, t_follow: float, dt: float, reset: bool) -> float:
+  if reset or lead is None or not lead.status or v_ego >= GENTLE_FAR_LEAD_SPEED_MAX:
+    return 0.0
+  v_lead = max(float(lead.vLead), 0.0)
+  if city_lead_stopping(v_lead):
+    return 0.0
+  d_rel = float(lead.dRel)
+  closing = v_ego - v_lead
+  desired = get_safe_obstacle_distance(v_ego, t_follow) - get_stopped_equivalence_factor(v_lead)
+  in_gap = d_rel <= max(desired * CITY_ESTABLISHED_GAP_MARGIN, 12.0) and closing <= CITY_COAST_MAX_CLOSING + 0.5
+  if in_gap:
+    return follow_t + dt
+  return 0.0
+
+
+def needs_city_late_brake_assist(lead, v_ego: float, a_ego: float, a_plan: float, follow_t: float,
+                                cfg: CityCruiseParams | None = None) -> bool:
+  """Extra city braking only on a fast approach / late catch-up — not established gentle follow."""
+  c = cfg or CityCruiseParams.defaults()
+  if not c.enabled or not c.late_brake_assist_enabled:
+    return False
+  if lead is None or not lead.status:
+    return False
+  if is_city_established_follow(follow_t, c) and not lead_is_hard_braking(lead, v_ego, follow_t, c):
+    return False
+  if is_city_fast_approach(lead, v_ego, follow_t, c):
+    return False  # early slowing is via cap_v_cruise_city only
+  if not city_closing_brake_active(lead, v_ego):
+    return False
+  if a_ego <= CITY_BRAKE_ASSIST_MAX_A_EGO or a_plan <= CITY_BRAKE_ASSIST_MIN_PLAN_DECEL:
+    return False
+  d_rel = float(lead.dRel)
+  v_lead = max(float(lead.vLead), 0.0)
+  closing = v_ego - v_lead
+  if d_rel > 18.0 and closing < 4.0:
+    return False
+  return True
+
+
+def cap_v_cruise_for_slow_lead(v_cruise: float, lead, v_ego: float, a_ego: float = 0.0,
+                               follow_t: float = 0.0, cfg: CityCruiseParams | None = None) -> float:
+  return cap_v_cruise_city(v_cruise, lead, v_ego, a_ego, follow_t, cfg)
+
+
+def cap_v_cruise_city(v_cruise: float, lead, v_ego: float, a_ego: float, follow_t: float,
+                      cfg: CityCruiseParams | None = None) -> float:
+  c = cfg or CityCruiseParams.defaults()
+  if not c.enabled or lead is None or not lead.status or v_ego >= CITY_FOLLOW_CAP_MAX_V_EGO:
     return v_cruise
   v_lead = max(float(lead.vLead), 0.0)
   d_rel = float(lead.dRel)
   if v_lead >= CITY_FOLLOW_CAP_MAX_V_LEAD or d_rel >= CITY_FOLLOW_CAP_MAX_D_REL:
     return v_cruise
-  buffer = float(np.interp(d_rel, [8.0, 25.0, 60.0, 100.0], [0.0, 1.5, 5.0, 10.0]))
-  return min(v_cruise, max(v_lead + buffer, 0.5))
+  if is_city_established_follow(follow_t, c):
+    return v_cruise
+  if is_city_fast_approach(lead, v_ego, follow_t, c):
+    mid = 0.5 * (c.approach_min_dist_m + c.approach_max_dist_m)
+    buffer = float(np.interp(
+      d_rel,
+      [c.approach_min_dist_m, mid, c.approach_max_dist_m],
+      c.approach_buffer_v,
+    ))
+    return min(v_cruise, max(v_lead + buffer, 0.5))
+  if city_lead_stopping(v_lead):
+    if d_rel > 18.0:
+      return v_cruise
+    buffer = float(np.interp(d_rel, [6.0, 12.0, 18.0], [0.0, 0.5, 1.0]))
+    return min(v_cruise, max(v_lead + buffer, 0.5))
+  return v_cruise
 
 
 def city_imminent_collision(d_rel: float, ttc: float, lead_status: bool) -> bool:
@@ -170,6 +313,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.gentle_lead_braking_far_lead = True
     self.gentle_lead_braking_level = 50
     self.t_follow_overrides: tuple[float, float, float] | None = None
+    self.city_lead_follow_t = 0.0
+    self.city_cruise = CityCruiseParams.defaults()
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -177,6 +322,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     self.update_gentle_lead_braking_params()
     self.update_t_follow_params()
+    self.update_city_cruise_params()
+
+  def update_city_cruise_params(self):
+    self.city_cruise = CityCruiseParams.from_params(self.params)
 
   def update_gentle_lead_braking_params(self):
     self.gentle_lead_braking = self.params.get_bool("GentleLeadBraking")
@@ -216,6 +365,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.update_gentle_lead_braking_params()
       self.update_t_follow_params()
+      self.update_city_cruise_params()
 
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -223,6 +373,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       accel_coast = ACCEL_MAX
 
     v_ego = sm['carState'].vEgo
+    a_ego = sm['carState'].aEgo
     v_cruise_kph = min(sm['carState'].vCruise, V_CRUISE_MAX)
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
@@ -244,6 +395,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     if reset_state:
       self.v_desired_filter.x = v_ego
+      self.city_lead_follow_t = 0.0
       # Clip aEgo to cruise limits to prevent large accelerations when becoming active
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
 
@@ -260,9 +412,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     lead_one = sm['radarState'].leadOne
 
+    t_follow = get_T_FOLLOW(sm['selfdriveState'].personality, self.t_follow_overrides)
+    self.city_lead_follow_t = update_city_lead_follow_t(
+      self.city_lead_follow_t, lead_one, v_ego, t_follow, self.dt, reset_state)
+
     # Get new v_cruise and a_desired from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
-    v_cruise = cap_v_cruise_for_slow_lead(v_cruise, lead_one, v_ego)
+    v_cruise = cap_v_cruise_city(v_cruise, lead_one, v_ego, a_ego, self.city_lead_follow_t, self.city_cruise)
 
     if force_slow_decel:
       v_cruise = 0.0
@@ -311,17 +467,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.output_should_stop = output_should_stop_mpc
 
     lead = lead_one
-    if self.is_e2e(sm) and lead.status:
-      v_lead = max(float(lead.vLead), 0.0)
-      d_rel = float(lead.dRel)
-      if v_ego < CITY_STOP_MAX_V_EGO and v_lead < CITY_STOP_MAX_V_LEAD and d_rel < CITY_STOP_MAX_D_REL:
-        self.output_should_stop = True
-        output_a_target = min(output_a_target, -1.5)
     if self.is_e2e(sm) and (output_should_stop_e2e or (v_ego < 10.0 and output_a_target_e2e < -1.0)):
       self.output_should_stop = True
       output_a_target = min(output_a_target, output_a_target_e2e)
 
-    if self.is_e2e(sm) and lead.status and city_closing_brake_active(lead, v_ego):
+    a_plan = min(output_a_target_mpc, output_a_target_e2e) if self.is_e2e(sm) else output_a_target_mpc
+    city_brake_assist = needs_city_late_brake_assist(
+      lead_one, v_ego, a_ego, a_plan, self.city_lead_follow_t, self.city_cruise)
+
+    if lead.status and should_city_coast(
+        lead_one, v_ego, self.city_lead_follow_t, output_a_target, self.city_cruise):
+      output_a_target = max(output_a_target, min(0.0, accel_coast))
+
+    if self.is_e2e(sm) and lead.status and city_brake_assist:
       v_lead = max(float(lead.vLead), 0.0)
       d_rel = float(lead.dRel)
       closing_speed = max(v_ego - v_lead, 0.1)
@@ -338,13 +496,18 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         v_lead = max(float(lead.vLead), 0.0)
         closing_speed = max(v_ego - v_lead, 0.1)
         ttc = d_rel / closing_speed
-        ttc_bypass = CITY_JERK_BYPASS_TTC if v_ego < GENTLE_FAR_LEAD_SPEED_MAX else OUTPUT_DECEL_TTC_BYPASS
-        if ttc < ttc_bypass:
+        if lead_is_hard_braking(lead, v_ego, self.city_lead_follow_t, self.city_cruise):
           emergency = True
+        else:
+          ttc_bypass = CITY_JERK_BYPASS_TTC if v_ego < GENTLE_FAR_LEAD_SPEED_MAX else OUTPUT_DECEL_TTC_BYPASS
+          skip_ttc_bypass = (city_lead_stopping(v_lead) or a_ego <= CITY_BRAKE_ASSIST_MAX_A_EGO or
+                             (is_city_established_follow(self.city_lead_follow_t, self.city_cruise) and
+                              not is_city_fast_approach(lead, v_ego, self.city_lead_follow_t, self.city_cruise)))
+          if ttc < ttc_bypass and not skip_ttc_bypass:
+            emergency = True
 
       if not emergency:
-        if (v_ego < GENTLE_FAR_LEAD_SPEED_MAX and lead.status and
-            city_closing_brake_active(lead, v_ego)):
+        if city_brake_assist:
           v_lead = max(float(lead.vLead), 0.0)
           closing_speed = max(v_ego - v_lead, 0.1)
           ttc = d_rel / closing_speed

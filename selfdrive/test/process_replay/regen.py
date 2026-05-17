@@ -18,18 +18,24 @@ from openpilot.tools.lib.openpilotci import get_url
 # Params required by fork longitudinal / radard code during replay (subset of initData).
 _FORK_REPLAY_KEYS = {
   "LeadHysteresis", "GentleLeadBraking", "GentleLeadBrakingFarLead", "GentleLeadBrakingLevel",
+  "CityCruiseAssist", "CityApproachEarlySlow", "CityEstablishedFollowCoast", "CityLateBrakeAssist",
+  "CityApproachMinDistFt", "CityApproachMaxDistFt", "CityApproachMinClosingMph", "CityApproachFarBufferMph",
+  "CityEstablishedFollowTimeS", "CityCoastMaxLeadAccel", "CityHardBrakeLeadAccel",
   "ExperimentalMode", "AlphaLongitudinalEnabled", "DynamicExperimentalControl",
   "LongitudinalTFollowAggressive", "LongitudinalTFollowStandard", "LongitudinalTFollowRelaxed",
   "SmartCruiseControlVision", "SmartCruiseControlMap",
 }
 _FORK_BOOL_KEYS = {
   "LeadHysteresis", "GentleLeadBraking", "GentleLeadBrakingFarLead",
+  "CityCruiseAssist", "CityApproachEarlySlow", "CityEstablishedFollowCoast", "CityLateBrakeAssist",
   "ExperimentalMode", "AlphaLongitudinalEnabled", "DynamicExperimentalControl",
   "SmartCruiseControlVision", "SmartCruiseControlMap",
 }
 _FORK_INT_KEYS = {"GentleLeadBrakingLevel"}
 _FORK_FLOAT_KEYS = {
   "LongitudinalTFollowAggressive", "LongitudinalTFollowStandard", "LongitudinalTFollowRelaxed",
+  "CityApproachMinDistFt", "CityApproachMaxDistFt", "CityApproachMinClosingMph", "CityApproachFarBufferMph",
+  "CityEstablishedFollowTimeS", "CityCoastMaxLeadAccel", "CityHardBrakeLeadAccel",
 }
 
 

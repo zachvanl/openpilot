@@ -6,6 +6,7 @@ from openpilot.common.parameterized import parameterized_class
 from cereal import log
 
 from opendbc.car.interfaces import ACCEL_MIN
+from openpilot.selfdrive.controls.lib.city_cruise_params import CityCruiseParams
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   GENTLE_DECEL_SMOOTH_DIST_BP,
   GENTLE_DECEL_SMOOTH_JERK_V,
@@ -23,8 +24,18 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   city_comfort_decel_limit,
   city_far_decel_floor,
   city_imminent_collision,
+  city_lead_stopping,
   city_urgent_mpc_disable,
+  needs_city_late_brake_assist,
   cap_v_cruise_for_slow_lead,
+  cap_v_cruise_city,
+  is_city_fast_approach,
+  is_city_established_follow,
+  should_city_coast,
+  lead_is_hard_braking,
+  CITY_ESTABLISHED_FOLLOW_TIME,
+  CITY_APPROACH_MIN_DIST,
+  CITY_APPROACH_MAX_DIST,
   OUTPUT_DECEL_EMERGENCY_DIST,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -255,9 +266,9 @@ def test_city_closing_decel_jerk_moderate_mid_ttc():
 
 
 def test_city_urgent_mpc_only_when_close():
-  lead = _LeadStub(True, 40.0, 1.0)
+  lead = _LeadStub(True, 40.0, 3.0)
   assert not city_urgent_mpc_disable(lead, 15.0)
-  assert city_urgent_mpc_disable(_LeadStub(True, 10.0, 1.0), 15.0)
+  assert city_urgent_mpc_disable(_LeadStub(True, 10.0, 3.0), 15.0)
 
 
 def test_city_imminent_collision():
@@ -267,27 +278,89 @@ def test_city_imminent_collision():
 
 
 class _LeadStub:
-  def __init__(self, status, d_rel, v_lead):
+  def __init__(self, status, d_rel, v_lead, a_lead_k=0.0):
     self.status = status
     self.dRel = d_rel
     self.vLead = v_lead
+    self.aLeadK = a_lead_k
 
 
 def test_city_closing_brake_active_slow_lead():
-  lead = _LeadStub(True, 40.0, 1.0)
+  lead = _LeadStub(True, 40.0, 3.0)
   assert city_closing_brake_active(lead, 15.0)
 
 
+def test_city_closing_brake_inactive_stopped_lead():
+  lead = _LeadStub(True, 25.0, 0.5)
+  assert city_lead_stopping(0.5)
+  assert not city_closing_brake_active(lead, 12.0)
+
+
 def test_city_closing_brake_inactive_highway_speed():
-  lead = _LeadStub(True, 40.0, 1.0)
+  lead = _LeadStub(True, 40.0, 3.0)
   assert not city_closing_brake_active(lead, 30.0)
 
 
-def test_cap_v_cruise_for_slow_lead():
-  lead = _LeadStub(True, 25.0, 2.0)
-  capped = cap_v_cruise_for_slow_lead(20.0, lead, 15.0)
+def test_needs_city_late_brake_assist_only_when_late():
+  lead = _LeadStub(True, 22.0, 3.0)
+  assert needs_city_late_brake_assist(lead, 15.0, 0.0, 0.0, 0.0)
+  assert not needs_city_late_brake_assist(lead, 15.0, -1.0, 0.0, 0.0)
+  assert not needs_city_late_brake_assist(lead, 15.0, 0.0, -1.5, 0.0)
+  stopped = _LeadStub(True, 20.0, 0.0)
+  assert not needs_city_late_brake_assist(stopped, 12.0, 0.0, 0.0, 0.0)
+  assert not needs_city_late_brake_assist(lead, 15.0, 0.0, 0.0, CITY_ESTABLISHED_FOLLOW_TIME)
+
+
+def test_city_fast_approach_window():
+  lead = _LeadStub(True, 38.0, 4.0)
+  assert is_city_fast_approach(lead, 15.0, 0.0)
+  assert not is_city_fast_approach(lead, 15.0, CITY_ESTABLISHED_FOLLOW_TIME)
+  close = _LeadStub(True, 18.0, 4.0)
+  assert not is_city_fast_approach(close, 15.0, 0.0)
+  far = _LeadStub(True, 55.0, 4.0)
+  assert not is_city_fast_approach(far, 15.0, 0.0)
+
+
+def test_cap_v_cruise_fast_approach_only_before_established():
+  lead = _LeadStub(True, 38.0, 4.0)
+  capped = cap_v_cruise_city(20.0, lead, 15.0, 0.0, 0.0)
   assert capped < 20.0
-  assert capped >= 2.0
+  assert capped >= 4.0
+  assert cap_v_cruise_city(20.0, lead, 15.0, 0.0, CITY_ESTABLISHED_FOLLOW_TIME) == 20.0
+
+
+def test_cap_v_cruise_no_far_cap_on_stopped_lead():
+  lead = _LeadStub(True, 40.0, 0.0)
+  assert cap_v_cruise_city(20.0, lead, 12.0, 0.0, 0.0) == 20.0
+
+
+def test_city_coast_when_lead_slows_gently():
+  lead = _LeadStub(True, 22.0, 12.0, a_lead_k=-0.3)
+  assert should_city_coast(lead, 14.0, CITY_ESTABLISHED_FOLLOW_TIME, -0.8)
+  assert should_city_coast(lead, 14.0, CITY_ESTABLISHED_FOLLOW_TIME, -1.5)
+  assert not should_city_coast(lead, 14.0, 0.0, -0.8)
+
+
+def test_lead_hard_brake_detection():
+  soft = _LeadStub(True, 20.0, 10.0, a_lead_k=-0.5)
+  hard = _LeadStub(True, 20.0, 10.0, a_lead_k=-2.5)
+  assert not lead_is_hard_braking(soft, 14.0, CITY_ESTABLISHED_FOLLOW_TIME)
+  assert lead_is_hard_braking(hard, 14.0, CITY_ESTABLISHED_FOLLOW_TIME)
+
+
+def test_city_cruise_params_master_disable():
+  off = CityCruiseParams.from_values(enabled=False)
+  lead = _LeadStub(True, 38.0, 4.0)
+  assert not is_city_fast_approach(lead, 15.0, 0.0, off)
+  assert cap_v_cruise_city(20.0, lead, 15.0, 0.0, 0.0, off) == 20.0
+
+
+def test_city_cruise_params_custom_approach_distance():
+  cfg = CityCruiseParams.from_values(approach_min_ft=120.0, approach_max_ft=180.0)
+  lead = _LeadStub(True, 40.0, 4.0)  # ~131 ft
+  assert is_city_fast_approach(lead, 15.0, 0.0, cfg)
+  too_close = _LeadStub(True, 25.0, 4.0)
+  assert not is_city_fast_approach(too_close, 15.0, 0.0, cfg)
 
 
 def test_clip_curvature_speed_dependent_limits():
