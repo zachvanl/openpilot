@@ -154,7 +154,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
     return None
 
 
-def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: float, model_v_ego: float):
+def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: float, model_v_ego: float, lead_prob: float):
   lead_v_rel_pred = lead_msg.v[0] - model_v_ego
   return {
     "dRel": float(lead_msg.x[0] - RADAR_TO_CAMERA),
@@ -165,7 +165,7 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
     "aLeadK": float(lead_msg.a[0]),
     "aLeadTau": 0.3,
     "fcw": False,
-    "modelProb": float(lead_msg.prob),
+    "modelProb": float(lead_prob),
     "status": True,
     "radar": False,
     "radarTrackId": -1,
@@ -173,20 +173,21 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
-             model_v_ego: float, CP: structs.CarParams, CP_SP: structs.CarParamsSP, low_speed_override: bool = True) -> dict[str, Any]:
+             model_v_ego: float, lead_prob: float, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
+             low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
-  if len(tracks) > 0 and ready and lead_msg.prob > LEAD_ACQUIRE_PROB:
+  # lead_prob is typically the asymmetric-filtered model probability from RadarD.
+  if len(tracks) > 0 and ready and lead_prob > LEAD_ACQUIRE_PROB:
     track = match_vision_to_track(v_ego, lead_msg, tracks)
   else:
     track = None
 
   lead_dict = {'status': False}
   if track is not None:
-    lead_dict = track.get_RadarState(lead_msg.prob)
+    lead_dict = track.get_RadarState(lead_prob)
     lead_dict = get_custom_yrel(CP, CP_SP, lead_dict, lead_msg)
-  elif (track is None) and ready and (lead_msg.prob >= LEAD_VISION_ACQUIRE_PROB) and len(lead_msg.x) > 0:
-    if float(lead_msg.x[0]) > LEAD_EARLY_ACQUIRE_MIN_X:
-      lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
+  elif (track is None) and ready and (lead_prob > LEAD_ACQUIRE_PROB):
+    lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, lead_prob)
 
   if low_speed_override:
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
@@ -218,6 +219,7 @@ class RadarD:
 
     self.tracks: dict[int, Track] = {}
     self.kalman_params = KalmanParams(DT_MDL)
+    self.lead_prob_filters = [FirstOrderFilter(0.0, 0.2, DT_MDL) for _ in range(2)]
 
     self.v_ego = 0.0
     self.v_ego_hist = deque([0.0], maxlen=int(round(delay / DT_MDL))+1)
@@ -252,11 +254,10 @@ class RadarD:
       return lead_dict
 
     # Radarless cars: acquire vision leads below 0.5 so MPC sees stopped traffic earlier.
-    if (not lead_dict['status'] and prob >= LEAD_RELEASE_PROB and len(lead_msg.x) > 0 and
+    if (not lead_dict['status'] and prob >= LEAD_VISION_ACQUIRE_PROB and len(lead_msg.x) > 0 and
         float(lead_msg.x[0]) > LEAD_EARLY_ACQUIRE_MIN_X):
-      acquired = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego)
+      acquired = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego, prob)
       acquired['fcw'] = False
-      acquired['modelProb'] = prob
       self.prev_lead_active[idx] = True
       self.lead_hold_frames[idx] = 0
       return acquired
@@ -265,9 +266,8 @@ class RadarD:
         prob >= LEAD_RELEASE_PROB and
         self.lead_hold_frames[idx] < max_hold_frames):
       self.lead_hold_frames[idx] += 1
-      held = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego)
+      held = get_RadarState_from_vision(lead_msg, self.v_ego, model_v_ego, prob)
       held['fcw'] = False
-      held['modelProb'] = prob
       return held
 
     self.prev_lead_active[idx] = False
@@ -315,9 +315,20 @@ class RadarD:
       model_v_ego = self.v_ego
     leads_v3 = sm['modelV2'].leadsV3
     if len(leads_v3) > 1:
-      lead_one = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.CP, self.CP_SP, low_speed_override=True)
-      lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.CP, self.CP_SP, low_speed_override=False)
+      for i in range(2):
+        # Asymmetric filter on lead prob to keep lead when uncertain
+        lead_prob = leads_v3[i].prob
+        if lead_prob > self.lead_prob_filters[i].x:
+          self.lead_prob_filters[i].x = lead_prob
+        else:
+          self.lead_prob_filters[i].update(lead_prob)
 
+      lead_one = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.lead_prob_filters[0].x,
+                          self.CP, self.CP_SP, low_speed_override=True)
+      lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.lead_prob_filters[1].x,
+                          self.CP, self.CP_SP, low_speed_override=False)
+
+      # Optional radarless hold/early-acquire on top of the filtered vision path
       if self.lead_hysteresis_enabled:
         lead_one = self._apply_lead_hysteresis(lead_one, leads_v3[0], 0, model_v_ego)
         lead_two = self._apply_lead_hysteresis(lead_two, leads_v3[1], 1, model_v_ego)
