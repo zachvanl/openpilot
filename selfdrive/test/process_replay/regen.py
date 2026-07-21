@@ -152,14 +152,15 @@ def regen_and_save(
   print("\n\n", "*"*30, "\n\n", sep="")
   print("New route:", rel_log_dir, "\n")
 
-  # Full-stack regen should stay engaged; radard/plannerd-only whitelist keeps stock
-  # selfdriveState from the source log and often fails the consecutive-active streak.
-  pubs = {pub for cfg in replayed_processes for pub in cfg.pubs}
-  if "selfdriveState" in pubs:
+  # Full-stack regen should stay engaged. Whitelist-only runs (e.g. radard,plannerd)
+  # keep stock selfdriveState from the source log; plannerd *consumes* selfdriveState as
+  # an input pub, so do not key the hard fail off cfg.pubs.
+  regenerates_selfdrive = any(cfg.proc_name in ("selfdrived", "controlsd") for cfg in replayed_processes)
+  if regenerates_selfdrive:
     if not check_openpilot_enabled(output_logs):
       raise Exception("Route did not engage for long enough")
   elif not check_openpilot_enabled(output_logs):
-    print("WARN: engage streak short (ok for whitelist without selfdriveState publisher)")
+    print("WARN: engage streak short (ok for whitelist without regenerating selfdriveState)")
   if not check_most_messages_valid(output_logs):
     raise Exception("Route has too many invalid messages")
 
