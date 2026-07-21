@@ -391,7 +391,7 @@
                   "min": 0.1,
                   "max": 5.0,
                   "step": 0.1,
-                  "unit": "m/s\u00c2\u00b2",
+                  "unit": "m/s\u00b2",
                   "enablement": [
                     {
                       "type": "param",
@@ -1090,7 +1090,7 @@
               "key": "CityCruiseAssist",
               "widget": "toggle",
               "title": "City Cruise Assist (master)",
-              "description": "Master switch for city follow tuning below ~50 MPH \u00e2\u20ac\u201d early approach slowdown, established coast, optional late brake assist.",
+              "description": "Master switch for city follow tuning below ~50 MPH \u2014 early approach slowdown, established coast, optional late brake assist.",
               "enablement": [
                 {
                   "type": "capability",
@@ -1189,7 +1189,7 @@
                   "key": "CityApproachEarlySlow",
                   "widget": "toggle",
                   "title": "Early slowdown when approaching",
-                  "description": "Lowers cruise from ~100\u00e2\u20ac\u201c150 ft on a fresh fast approach to a slow or stopped lead."
+                  "description": "Lowers cruise from ~100\u2013150 ft on a fresh fast approach to a slow or stopped lead."
                 },
                 {
                   "key": "CityApproachMinDistFt",
@@ -1241,12 +1241,12 @@
                   "key": "CityLateBrakeAssist",
                   "widget": "toggle",
                   "title": "Late brake assist (moving leads)",
-                  "description": "Extra braking when catching a slow moving lead late \u00e2\u20ac\u201d not for established stop queues."
+                  "description": "Extra braking when catching a slow moving lead late \u2014 not for established stop queues."
                 },
                 {
                   "key": "CityCoastMaxLeadAccel",
                   "widget": "option",
-                  "title": "Coast gentle lead decel (m/s\u00c2\u00b2)",
+                  "title": "Coast gentle lead decel (m/s\u00b2)",
                   "min": -2.0,
                   "max": 0,
                   "step": 0.1
@@ -1254,7 +1254,7 @@
                 {
                   "key": "CityHardBrakeLeadAccel",
                   "widget": "option",
-                  "title": "Hard brake threshold (m/s\u00c2\u00b2)",
+                  "title": "Hard brake threshold (m/s\u00b2)",
                   "min": -5.0,
                   "max": -0.5,
                   "step": 0.1
