@@ -78,6 +78,35 @@ def apply_fork_params_from_lr(lr: LogIterable) -> None:
       params.put(key, val)
 
 
+def assert_replay_inputs_present(all_msgs: list[capnp._DynamicStructReader], processes: Iterable[ProcessConfig]) -> None:
+  """Fail fast when whitelist regen cannot run (common with qlog-only segments).
+
+  radard/plannerd poll on modelV2. Decimated qlogs often keep drivingModelData but drop
+  modelV2 — process_replay then emits zero outputs and return_all_logs silently keeps stock
+  plans, which looks like a successful no-op regen.
+  """
+  present = {m.which() for m in all_msgs}
+  missing: list[str] = []
+  for cfg in processes:
+    # MessageBasedRcvCallback trigger (main_pub) or any required pub used as cycle edge
+    need = set(cfg.pubs)
+    if cfg.main_pub:
+      need.add(cfg.main_pub)
+    elif cfg.should_recv_callback is not None and hasattr(cfg.should_recv_callback, "trigger_msg_type"):
+      need.add(cfg.should_recv_callback.trigger_msg_type)
+    absent = sorted(need - present)
+    if absent:
+      missing.append(f"{cfg.proc_name}: missing {', '.join(absent)}")
+  if missing:
+    hint = ""
+    if "modelV2" in present or any("modelV2" in m for m in missing):
+      hint = (
+        " Prefer an uploaded rlog (…/r) or copy the segment from the device; "
+        "qlogs often lack modelV2 (only drivingModelData)."
+      )
+    raise Exception("Cannot regen — required process inputs absent from log. " + "; ".join(missing) + "." + hint)
+
+
 def regen_segment(
   lr: LogIterable, frs: dict[str, Any] | None = None,
   processes: Iterable[ProcessConfig] = CONFIGS, disable_tqdm: bool = False
@@ -86,11 +115,25 @@ def regen_segment(
   custom_params = get_custom_params_from_lr(all_msgs)
   apply_fork_params_from_lr(all_msgs)
 
-  print("Replayed processes:", [p.proc_name for p in processes])
+  procs = list(processes)
+  print("Replayed processes:", [p.proc_name for p in procs])
+  assert_replay_inputs_present(all_msgs, procs)
   print("\n\n", "*"*30, "\n\n", sep="")
 
-  output_logs = replay_process(processes, all_msgs, frs, return_all_logs=True, custom_params=custom_params, disable_progress=disable_tqdm)
+  # Process-only logs first so we can detect silent no-op before merging stock messages.
+  process_logs = replay_process(procs, all_msgs, frs, return_all_logs=False, custom_params=custom_params, disable_progress=disable_tqdm)
+  expected_subs = {sub for cfg in procs for sub in cfg.subs}
+  got = {m.which() for m in process_logs}
+  if not process_logs or not (got & expected_subs):
+    raise Exception(
+      f"Process replay produced no outputs for {sorted(expected_subs)} (got {sorted(got) or 'nothing'}). "
+      "Check msgq/fake events and that trigger pubs (e.g. modelV2) exist in the source log."
+    )
 
+  keys = {m.which() for m in process_logs}
+  output_logs = [m for m in all_msgs if m.which() not in keys]
+  output_logs.extend(process_logs)
+  output_logs.sort(key=lambda m: int(m.logMonoTime))
   return output_logs
 
 
